@@ -39,16 +39,16 @@ async function handleEvent(event) {
 
   await client.replyMessage({
     replyToken: event.replyToken,
-    messages: [{ type: 'text', text: `กำลังตรวจสอบพัสดุ ${trackingNumber} ...` }],
+    messages: [{ type: 'text', text: `🔍 กำลังตรวจสอบพัสดุ ${trackingNumber} ...` }],
   });
 
   try {
     const result = await trackParcel(trackingNumber);
-    const message = formatTrackingResult(trackingNumber, result);
+    const flexMessage = buildFlexMessage(trackingNumber, result);
 
     await client.pushMessage({
       to: event.source.userId,
-      messages: [{ type: 'text', text: message }],
+      messages: [flexMessage],
     });
   } catch (err) {
     await client.pushMessage({
@@ -59,32 +59,189 @@ async function handleEvent(event) {
 }
 
 function extractTrackingNumber(text) {
-  // Thai Post tracking numbers: 13 chars, pattern like EF123456789TH or RR123456789TH
   const match = text.match(/[A-Z]{2}\d{9}[A-Z]{2}/i);
   return match ? match[0].toUpperCase() : null;
 }
 
-function formatTrackingResult(trackingNumber, items) {
+function getStatusStep(statusCode) {
+  const code = parseInt(statusCode);
+  if (code >= 300) return 4; // นำจ่ายสำเร็จ
+  if (code >= 200) return 3; // ออกไปนำจ่าย
+  if (code >= 102) return 2; // ระหว่างขนส่ง
+  return 1; // รับเข้าระบบ
+}
+
+function stepColor(current, step) {
+  return current >= step ? '#E31837' : '#CCCCCC';
+}
+
+function buildFlexMessage(trackingNumber, items) {
   if (!items || items.length === 0) {
-    return `ไม่พบข้อมูลพัสดุหมายเลข ${trackingNumber}`;
+    return { type: 'text', text: `ไม่พบข้อมูลพัสดุหมายเลข ${trackingNumber}` };
   }
 
   const latest = items[0];
-  const lines = [
-    `📦 พัสดุหมายเลข: ${trackingNumber}`,
-    `📍 สถานะล่าสุด: ${latest.status_description || latest.status}`,
-    `🏢 สถานที่: ${latest.location || '-'}`,
-    `📅 เวลา: ${latest.status_date || '-'}`,
-    `📝 รายละเอียด: ${latest.status_detail || '-'}`,
-    '',
-    '--- ประวัติการเคลื่อนไหว ---',
+  const currentStep = getStatusStep(latest.status);
+
+  const steps = [
+    { label: 'รับเข้าระบบ', step: 1 },
+    { label: 'ระหว่างขนส่ง', step: 2 },
+    { label: 'ออกไปนำจ่าย', step: 3 },
+    { label: 'นำจ่ายสำเร็จ', step: 4 },
   ];
 
-  items.slice(0, 5).forEach((item) => {
-    lines.push(`• ${item.status_date || '-'} - ${item.status_description || item.status} (${item.location || '-'})`);
-  });
+  const stepBoxes = steps.map((s) => ({
+    type: 'box',
+    layout: 'vertical',
+    alignItems: 'center',
+    flex: 1,
+    contents: [
+      {
+        type: 'box',
+        layout: 'vertical',
+        width: '28px',
+        height: '28px',
+        cornerRadius: '14px',
+        backgroundColor: stepColor(currentStep, s.step),
+        justifyContent: 'center',
+        alignItems: 'center',
+        contents: [
+          {
+            type: 'text',
+            text: currentStep >= s.step ? '✓' : `${s.step}`,
+            color: '#FFFFFF',
+            size: 'xs',
+            weight: 'bold',
+            align: 'center',
+          },
+        ],
+      },
+      {
+        type: 'text',
+        text: s.label,
+        size: 'xxs',
+        color: currentStep >= s.step ? '#E31837' : '#AAAAAA',
+        align: 'center',
+        wrap: true,
+        margin: 'sm',
+      },
+    ],
+  }));
 
-  return lines.join('\n');
+  const timelineRows = items.slice(0, 6).map((item, i) => ({
+    type: 'box',
+    layout: 'horizontal',
+    spacing: 'md',
+    paddingBottom: 'md',
+    contents: [
+      {
+        type: 'box',
+        layout: 'vertical',
+        alignItems: 'center',
+        width: '24px',
+        contents: [
+          {
+            type: 'box',
+            layout: 'vertical',
+            width: '12px',
+            height: '12px',
+            cornerRadius: '6px',
+            backgroundColor: i === 0 ? '#E31837' : '#CCCCCC',
+            contents: [],
+          },
+          ...(i < items.slice(0, 6).length - 1
+            ? [{
+                type: 'box',
+                layout: 'vertical',
+                width: '2px',
+                flex: 1,
+                backgroundColor: '#DDDDDD',
+                contents: [],
+              }]
+            : []),
+        ],
+      },
+      {
+        type: 'box',
+        layout: 'vertical',
+        flex: 1,
+        contents: [
+          {
+            type: 'text',
+            text: item.status_detail || item.status_description || '-',
+            size: 'sm',
+            color: i === 0 ? '#111111' : '#555555',
+            weight: i === 0 ? 'bold' : 'regular',
+            wrap: true,
+          },
+          {
+            type: 'text',
+            text: item.status_date || '-',
+            size: 'xxs',
+            color: '#AAAAAA',
+            margin: 'xs',
+          },
+        ],
+      },
+    ],
+  }));
+
+  return {
+    type: 'flex',
+    altText: `พัสดุ ${trackingNumber}: ${latest.status_description || latest.status}`,
+    contents: {
+      type: 'bubble',
+      size: 'giga',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: '#E31837',
+        paddingAll: 'lg',
+        contents: [
+          {
+            type: 'text',
+            text: '📦 ติดตามพัสดุไปรษณีย์ไทย',
+            color: '#FFFFFF',
+            weight: 'bold',
+            size: 'md',
+          },
+          {
+            type: 'text',
+            text: trackingNumber,
+            color: '#FFCCCC',
+            size: 'sm',
+            margin: 'xs',
+          },
+        ],
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        paddingAll: 'lg',
+        spacing: 'lg',
+        contents: [
+          {
+            type: 'box',
+            layout: 'horizontal',
+            contents: stepBoxes,
+          },
+          { type: 'separator' },
+          {
+            type: 'text',
+            text: 'ประวัติการเคลื่อนไหว',
+            weight: 'bold',
+            size: 'sm',
+            color: '#333333',
+          },
+          {
+            type: 'box',
+            layout: 'vertical',
+            contents: timelineRows,
+          },
+        ],
+      },
+    },
+  };
 }
 
 const PORT = process.env.PORT || 3000;
