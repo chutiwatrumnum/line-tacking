@@ -1,7 +1,9 @@
 require('dotenv').config();
 const express = require('express');
 const line = require('@line/bot-sdk');
+const cron = require('node-cron');
 const { trackParcel } = require('./thaipost');
+const store = require('./store');
 
 const config = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
@@ -45,12 +47,24 @@ async function handleEvent(event) {
   try {
     const result = await trackParcel(trackingNumber);
     const flexMessage = buildFlexMessage(trackingNumber, result);
+    const sorted = [...result].reverse();
+    const latest = sorted[0];
 
     await client.pushMessage({
       to: event.source.userId,
       messages: [flexMessage],
     });
+
+    // Subscribe for auto-notify (only if not delivered yet)
+    if (latest && parseInt(latest.status) < 300) {
+      store.subscribe(trackingNumber, event.source.userId, latest.status);
+      await client.pushMessage({
+        to: event.source.userId,
+        messages: [{ type: 'text', text: `🔔 ระบบจะแจ้งเตือนอัตโนมัติเมื่อสถานะพัสดุ ${trackingNumber} เปลี่ยนแปลงครับ` }],
+      });
+    }
   } catch (err) {
+    console.error(err);
     await client.pushMessage({
       to: event.source.userId,
       messages: [{ type: 'text', text: `ไม่สามารถตรวจสอบพัสดุ ${trackingNumber} ได้\nกรุณาลองใหม่อีกครั้ง` }],
@@ -58,17 +72,65 @@ async function handleEvent(event) {
   }
 }
 
+// ตรวจสถานะทุก 30 นาที
+cron.schedule('*/30 * * * *', async () => {
+  const subs = store.getAll();
+  const keys = Object.keys(subs);
+  if (keys.length === 0) return;
+
+  console.log(`[CRON] Checking ${keys.length} parcel(s)...`);
+
+  for (const trackingNumber of keys) {
+    const { userId, lastStatus } = subs[trackingNumber];
+    try {
+      const result = await trackParcel(trackingNumber);
+      const sorted = [...result].reverse();
+      const latest = sorted[0];
+      if (!latest) continue;
+
+      if (latest.status !== lastStatus) {
+        store.updateStatus(trackingNumber, latest.status);
+        const flexMessage = buildFlexMessage(trackingNumber, result);
+
+        await client.pushMessage({
+          to: userId,
+          messages: [
+            {
+              type: 'text',
+              text: `🔔 อัปเดตพัสดุ ${trackingNumber}\n📍 ${latest.status_description}: ${latest.location || ''}\n🕐 ${formatDate(latest.status_date)}`,
+            },
+            flexMessage,
+          ],
+        });
+
+        // Unsubscribe if delivered
+        if (parseInt(latest.status) >= 300) {
+          store.unsubscribe(trackingNumber);
+          console.log(`[CRON] ${trackingNumber} delivered, unsubscribed.`);
+        }
+      }
+    } catch (err) {
+      console.error(`[CRON] Error checking ${trackingNumber}:`, err.message);
+    }
+  }
+});
+
 function extractTrackingNumber(text) {
   const match = text.match(/[A-Z]{2}\d{9}[A-Z]{2}/i);
   return match ? match[0].toUpperCase() : null;
 }
 
+function formatDate(dateStr) {
+  if (!dateStr) return '-';
+  return dateStr.replace(/\+07:00$/, '').trim();
+}
+
 function getStatusStep(statusCode) {
   const code = parseInt(statusCode);
-  if (code >= 300) return 4; // นำจ่ายสำเร็จ
-  if (code >= 200) return 3; // ออกไปนำจ่าย
-  if (code >= 102) return 2; // ระหว่างขนส่ง
-  return 1; // รับเข้าระบบ
+  if (code >= 300) return 4;
+  if (code >= 200) return 3;
+  if (code >= 102) return 2;
+  return 1;
 }
 
 function stepColor(current, step) {
@@ -80,7 +142,7 @@ function buildFlexMessage(trackingNumber, items) {
     return { type: 'text', text: `ไม่พบข้อมูลพัสดุหมายเลข ${trackingNumber}` };
   }
 
-  const sorted = [...items].reverse(); // newest first
+  const sorted = [...items].reverse();
   const latest = sorted[0];
   const currentStep = getStatusStep(latest.status);
 
@@ -177,7 +239,7 @@ function buildFlexMessage(trackingNumber, items) {
           },
           {
             type: 'text',
-            text: item.status_date || '-',
+            text: formatDate(item.status_date),
             size: 'xxs',
             color: '#AAAAAA',
             margin: 'xs',
@@ -253,7 +315,7 @@ function buildFlexMessage(trackingNumber, items) {
                 layout: 'horizontal',
                 contents: [
                   { type: 'text', text: 'เวลา', size: 'sm', color: '#888888', flex: 2 },
-                  { type: 'text', text: latest.status_date || '-', size: 'sm', color: '#111111', flex: 5, wrap: true },
+                  { type: 'text', text: formatDate(latest.status_date), size: 'sm', color: '#111111', flex: 5, wrap: true },
                 ],
               },
               ...(latest.receiver_name ? [{
