@@ -80,7 +80,8 @@ function buildFlexMessage(trackingNumber, items) {
     return { type: 'text', text: `ไม่พบข้อมูลพัสดุหมายเลข ${trackingNumber}` };
   }
 
-  const latest = items[0];
+  const sorted = [...items].reverse(); // newest first
+  const latest = sorted[0];
   const currentStep = getStatusStep(latest.status);
 
   const steps = [
@@ -128,7 +129,7 @@ function buildFlexMessage(trackingNumber, items) {
     ],
   }));
 
-  const timelineRows = items.slice(0, 6).map((item, i) => ({
+  const timelineRows = sorted.slice(0, 8).map((item, i) => ({
     type: 'box',
     layout: 'horizontal',
     spacing: 'md',
@@ -149,7 +150,7 @@ function buildFlexMessage(trackingNumber, items) {
             backgroundColor: i === 0 ? '#E31837' : '#CCCCCC',
             contents: [],
           },
-          ...(i < items.slice(0, 6).length - 1
+          ...(i < sorted.slice(0, 8).length - 1
             ? [{
                 type: 'box',
                 layout: 'vertical',
@@ -224,6 +225,54 @@ function buildFlexMessage(trackingNumber, items) {
             type: 'box',
             layout: 'horizontal',
             contents: stepBoxes,
+          },
+          { type: 'separator' },
+          {
+            type: 'box',
+            layout: 'vertical',
+            spacing: 'xs',
+            contents: [
+              {
+                type: 'box',
+                layout: 'horizontal',
+                contents: [
+                  { type: 'text', text: 'สถานะ', size: 'sm', color: '#888888', flex: 2 },
+                  { type: 'text', text: latest.status_description || '-', size: 'sm', color: '#111111', flex: 5, weight: 'bold', wrap: true },
+                ],
+              },
+              {
+                type: 'box',
+                layout: 'horizontal',
+                contents: [
+                  { type: 'text', text: 'สถานที่', size: 'sm', color: '#888888', flex: 2 },
+                  { type: 'text', text: latest.location || '-', size: 'sm', color: '#111111', flex: 5, wrap: true },
+                ],
+              },
+              {
+                type: 'box',
+                layout: 'horizontal',
+                contents: [
+                  { type: 'text', text: 'เวลา', size: 'sm', color: '#888888', flex: 2 },
+                  { type: 'text', text: latest.status_date || '-', size: 'sm', color: '#111111', flex: 5, wrap: true },
+                ],
+              },
+              ...(latest.receiver_name ? [{
+                type: 'box',
+                layout: 'horizontal',
+                contents: [
+                  { type: 'text', text: 'ผู้รับ', size: 'sm', color: '#888888', flex: 2 },
+                  { type: 'text', text: latest.receiver_name, size: 'sm', color: '#111111', flex: 5, wrap: true },
+                ],
+              }] : []),
+              ...(latest.delivery_officer_name ? [{
+                type: 'box',
+                layout: 'horizontal',
+                contents: [
+                  { type: 'text', text: 'บุรุษไปรษณีย์', size: 'sm', color: '#888888', flex: 2 },
+                  { type: 'text', text: latest.delivery_officer_name, size: 'sm', color: '#111111', flex: 5, wrap: true },
+                ],
+              }] : []),
+            ],
           },
           { type: 'separator' },
           {
