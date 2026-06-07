@@ -30,12 +30,65 @@ async function handleEvent(event) {
   if (event.type !== 'message' || event.message.type !== 'text') return;
 
   const userText = event.message.text.trim();
+  const userId = event.source.userId;
+
+  // คำสั่ง: ดูรายการ
+  if (userText === 'รายการ' || userText === 'list') {
+    const subs = store.getAll();
+    const myParcels = Object.entries(subs).filter(([, v]) => v.userId === userId);
+    if (myParcels.length === 0) {
+      return client.replyMessage({
+        replyToken: event.replyToken,
+        messages: [{ type: 'text', text: '📭 ไม่มีพัสดุที่กำลังติดตามอยู่ครับ\nส่งเลขพัสดุมาได้เลย' }],
+      });
+    }
+    const lines = ['📦 พัสดุที่กำลังติดตาม:\n'];
+    myParcels.forEach(([num], i) => {
+      lines.push(`${i + 1}. ${num}`);
+    });
+    lines.push('\nพิมพ์ "ยกเลิก [เลขพัสดุ]" เพื่อหยุดติดตาม');
+    return client.replyMessage({
+      replyToken: event.replyToken,
+      messages: [{ type: 'text', text: lines.join('\n') }],
+    });
+  }
+
+  // คำสั่ง: ยกเลิกติดตาม
+  const cancelMatch = userText.match(/^ยกเลิก\s+([A-Z]{2}\d{9}[A-Z]{2})/i);
+  if (cancelMatch) {
+    const num = cancelMatch[1].toUpperCase();
+    const subs = store.getAll();
+    if (subs[num] && subs[num].userId === userId) {
+      store.unsubscribe(num);
+      return client.replyMessage({
+        replyToken: event.replyToken,
+        messages: [{ type: 'text', text: `✅ ยกเลิกการติดตามพัสดุ ${num} แล้วครับ` }],
+      });
+    } else {
+      return client.replyMessage({
+        replyToken: event.replyToken,
+        messages: [{ type: 'text', text: `ไม่พบพัสดุ ${num} ในรายการติดตามของคุณครับ` }],
+      });
+    }
+  }
+
+  // คำสั่ง: ช่วยเหลือ
+  if (userText === 'ช่วยเหลือ' || userText === 'help' || userText === '?') {
+    return client.replyMessage({
+      replyToken: event.replyToken,
+      messages: [{
+        type: 'text',
+        text: '📌 วิธีใช้งาน\n\n🔍 ติดตามพัสดุ\nส่งเลขพัสดุ เช่น EF123456789TH\n\n📋 ดูรายการที่ติดตาม\nพิมพ์: รายการ\n\n❌ ยกเลิกติดตาม\nพิมพ์: ยกเลิก EF123456789TH\n\n🔔 ระบบจะแจ้งเตือนอัตโนมัติเมื่อสถานะเปลี่ยน',
+      }],
+    });
+  }
+
   const trackingNumber = extractTrackingNumber(userText);
 
   if (!trackingNumber) {
     return client.replyMessage({
       replyToken: event.replyToken,
-      messages: [{ type: 'text', text: 'กรุณาส่งเลขพัสดุที่ต้องการติดตาม\nตัวอย่าง: EF123456789TH' }],
+      messages: [{ type: 'text', text: 'ไม่พบเลขพัสดุครับ\n\nส่งเลขพัสดุ เช่น EF123456789TH\nหรือพิมพ์ "ช่วยเหลือ" เพื่อดูวิธีใช้' }],
     });
   }
 
@@ -55,12 +108,10 @@ async function handleEvent(event) {
     if (!latest) {
       // ไม่พบข้อมูล
     } else if (parseInt(latest.status) >= 300) {
-      // นำจ่ายสำเร็จแล้ว ไม่ต้อง subscribe
       extraMessages.push({ type: 'text', text: `✅ พัสดุ ${trackingNumber} นำจ่ายสำเร็จแล้วครับ` });
     } else {
-      // ยังไม่ถึง — subscribe ติดตาม
       const existing = store.getAll()[trackingNumber];
-      store.subscribe(trackingNumber, event.source.userId, latest.status);
+      store.subscribe(trackingNumber, userId, latest.status);
       if (existing) {
         extraMessages.push({ type: 'text', text: `🔔 อัปเดตการติดตามพัสดุ ${trackingNumber} แล้วครับ` });
       } else {
@@ -69,13 +120,13 @@ async function handleEvent(event) {
     }
 
     await client.pushMessage({
-      to: event.source.userId,
+      to: userId,
       messages: [flexMessage, ...extraMessages],
     });
   } catch (err) {
     console.error(err);
     await client.pushMessage({
-      to: event.source.userId,
+      to: userId,
       messages: [{ type: 'text', text: `ไม่สามารถตรวจสอบพัสดุ ${trackingNumber} ได้\nกรุณาลองใหม่อีกครั้ง` }],
     });
   }
