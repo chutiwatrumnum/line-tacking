@@ -99,30 +99,33 @@ async function handleEvent(event) {
 
   try {
     const result = await trackParcel(trackingNumber);
-    const flexMessage = buildFlexMessage(trackingNumber, result);
     const sorted = [...result].reverse();
     const latest = sorted[0];
 
-    const extraMessages = [];
-
+    // ถ้าไม่พบข้อมูล
     if (!latest) {
-      // ไม่พบข้อมูล
-    } else if (parseInt(latest.status) >= 300) {
-      extraMessages.push({ type: 'text', text: `✅ พัสดุ ${trackingNumber} นำจ่ายสำเร็จแล้วครับ` });
+      return await client.pushMessage({
+        to: userId,
+        messages: [{ type: 'text', text: `ไม่พบข้อมูลพัสดุ ${trackingNumber} ครับ\nกรุณาตรวจสอบเลขพัสดุอีกครั้ง` }],
+      });
+    }
+
+    const flexMessage = buildFlexMessage(trackingNumber, result);
+    let notifyText = '';
+
+    if (parseInt(latest.status) >= 300) {
+      notifyText = `✅ พัสดุ ${trackingNumber} นำจ่ายสำเร็จแล้วครับ`;
     } else {
       const existing = store.getAll()[trackingNumber];
       store.subscribe(trackingNumber, userId, latest.status);
-      if (existing) {
-        extraMessages.push({ type: 'text', text: `🔔 อัปเดตการติดตามพัสดุ ${trackingNumber} แล้วครับ` });
-      } else {
-        extraMessages.push({ type: 'text', text: `🔔 ระบบจะแจ้งเตือนอัตโนมัติเมื่อสถานะพัสดุ ${trackingNumber} เปลี่ยนแปลงครับ` });
-      }
+      notifyText = existing
+        ? `🔔 อัปเดตการติดตามพัสดุ ${trackingNumber} แล้วครับ`
+        : `🔔 ระบบจะแจ้งเตือนอัตโนมัติเมื่อสถานะพัสดุ ${trackingNumber} เปลี่ยนแปลงครับ`;
     }
 
-    await client.pushMessage({
-      to: userId,
-      messages: [flexMessage, ...extraMessages],
-    });
+    // ส่งทีละข้อความ ป้องกัน array เกิน 5
+    await client.pushMessage({ to: userId, messages: [flexMessage] });
+    await client.pushMessage({ to: userId, messages: [{ type: 'text', text: notifyText }] });
   } catch (err) {
     console.error(err);
     await client.pushMessage({
