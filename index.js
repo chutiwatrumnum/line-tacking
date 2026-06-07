@@ -50,19 +50,28 @@ async function handleEvent(event) {
     const sorted = [...result].reverse();
     const latest = sorted[0];
 
+    const extraMessages = [];
+
+    if (!latest) {
+      // ไม่พบข้อมูล
+    } else if (parseInt(latest.status) >= 300) {
+      // นำจ่ายสำเร็จแล้ว ไม่ต้อง subscribe
+      extraMessages.push({ type: 'text', text: `✅ พัสดุ ${trackingNumber} นำจ่ายสำเร็จแล้วครับ` });
+    } else {
+      // ยังไม่ถึง — subscribe ติดตาม
+      const existing = store.getAll()[trackingNumber];
+      store.subscribe(trackingNumber, event.source.userId, latest.status);
+      if (existing) {
+        extraMessages.push({ type: 'text', text: `🔔 อัปเดตการติดตามพัสดุ ${trackingNumber} แล้วครับ` });
+      } else {
+        extraMessages.push({ type: 'text', text: `🔔 ระบบจะแจ้งเตือนอัตโนมัติเมื่อสถานะพัสดุ ${trackingNumber} เปลี่ยนแปลงครับ` });
+      }
+    }
+
     await client.pushMessage({
       to: event.source.userId,
-      messages: [flexMessage],
+      messages: [flexMessage, ...extraMessages],
     });
-
-    // Subscribe for auto-notify (only if not delivered yet)
-    if (latest && parseInt(latest.status) < 300) {
-      store.subscribe(trackingNumber, event.source.userId, latest.status);
-      await client.pushMessage({
-        to: event.source.userId,
-        messages: [{ type: 'text', text: `🔔 ระบบจะแจ้งเตือนอัตโนมัติเมื่อสถานะพัสดุ ${trackingNumber} เปลี่ยนแปลงครับ` }],
-      });
-    }
   } catch (err) {
     console.error(err);
     await client.pushMessage({

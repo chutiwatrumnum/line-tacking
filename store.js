@@ -1,7 +1,10 @@
 const fs = require('fs');
 const path = require('path');
 
-const FILE = path.join(__dirname, 'subscriptions.json');
+// ใช้ /tmp บน Railway เพราะ writable, ใช้ __dirname บน local
+const FILE = process.env.RAILWAY_ENVIRONMENT
+  ? '/tmp/subscriptions.json'
+  : path.join(__dirname, 'subscriptions.json');
 
 function load() {
   try {
