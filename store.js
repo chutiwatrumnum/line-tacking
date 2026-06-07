@@ -1,22 +1,42 @@
-// Simple in-memory store for tracking subscriptions
-// Format: { trackingNumber: { userId, lastStatus } }
-const subscriptions = {};
+const fs = require('fs');
+const path = require('path');
+
+const FILE = path.join(__dirname, 'subscriptions.json');
+
+function load() {
+  try {
+    if (fs.existsSync(FILE)) {
+      return JSON.parse(fs.readFileSync(FILE, 'utf8'));
+    }
+  } catch (e) {}
+  return {};
+}
+
+function save(data) {
+  fs.writeFileSync(FILE, JSON.stringify(data, null, 2));
+}
 
 function subscribe(trackingNumber, userId, lastStatus) {
-  subscriptions[trackingNumber] = { userId, lastStatus };
+  const data = load();
+  data[trackingNumber] = { userId, lastStatus };
+  save(data);
 }
 
 function unsubscribe(trackingNumber) {
-  delete subscriptions[trackingNumber];
+  const data = load();
+  delete data[trackingNumber];
+  save(data);
 }
 
 function getAll() {
-  return subscriptions;
+  return load();
 }
 
 function updateStatus(trackingNumber, newStatus) {
-  if (subscriptions[trackingNumber]) {
-    subscriptions[trackingNumber].lastStatus = newStatus;
+  const data = load();
+  if (data[trackingNumber]) {
+    data[trackingNumber].lastStatus = newStatus;
+    save(data);
   }
 }
 
