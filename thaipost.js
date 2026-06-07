@@ -27,7 +27,14 @@ async function getToken() {
   return cachedToken;
 }
 
+// Track single parcel
 async function trackParcel(barcode) {
+  const result = await trackParcels([barcode]);
+  return result[barcode] || [];
+}
+
+// Track multiple parcels in one API call
+async function trackParcels(barcodes) {
   const token = await getToken();
 
   const response = await axios.post(
@@ -35,7 +42,7 @@ async function trackParcel(barcode) {
     {
       status: 'all',
       language: 'TH',
-      barcode: [barcode],
+      barcode: barcodes,
     },
     {
       headers: {
@@ -45,8 +52,7 @@ async function trackParcel(barcode) {
     }
   );
 
-  const items = response.data?.response?.items?.[barcode];
-  return items || [];
+  return response.data?.response?.items || {};
 }
 
-module.exports = { trackParcel };
+module.exports = { trackParcel, trackParcels };

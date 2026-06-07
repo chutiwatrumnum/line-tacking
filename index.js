@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const line = require('@line/bot-sdk');
 const cron = require('node-cron');
-const { trackParcel } = require('./thaipost');
+const { trackParcel, trackParcels } = require('./thaipost');
 const store = require('./store');
 
 const config = {
@@ -72,18 +72,21 @@ async function handleEvent(event) {
   }
 }
 
-// ตรวจสถานะทุก 30 นาที
+// ตรวจสถานะทุก 30 นาที (batch ทุกเลขในคำขอเดียว)
 cron.schedule('*/30 * * * *', async () => {
   const subs = store.getAll();
   const keys = Object.keys(subs);
   if (keys.length === 0) return;
 
-  console.log(`[CRON] Checking ${keys.length} parcel(s)...`);
+  console.log(`[CRON] Batch checking ${keys.length} parcel(s) in 1 API call...`);
 
-  for (const trackingNumber of keys) {
-    const { userId, lastStatus } = subs[trackingNumber];
-    try {
-      const result = await trackParcel(trackingNumber);
+  try {
+    // 1 API call สำหรับทุกเลขพัสดุ
+    const allResults = await trackParcels(keys);
+
+    for (const trackingNumber of keys) {
+      const { userId, lastStatus } = subs[trackingNumber];
+      const result = allResults[trackingNumber] || [];
       const sorted = [...result].reverse();
       const latest = sorted[0];
       if (!latest) continue;
@@ -109,9 +112,9 @@ cron.schedule('*/30 * * * *', async () => {
           console.log(`[CRON] ${trackingNumber} delivered, unsubscribed.`);
         }
       }
-    } catch (err) {
-      console.error(`[CRON] Error checking ${trackingNumber}:`, err.message);
     }
+  } catch (err) {
+    console.error(`[CRON] Batch error:`, err.message);
   }
 });
 
