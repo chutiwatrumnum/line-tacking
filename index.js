@@ -425,6 +425,27 @@ function buildFlexMessage(trackingNumber, items) {
 // Health check endpoint สำหรับ ping ตัวเอง
 app.get('/ping', (req, res) => res.send('pong'));
 
+// Test endpoint — จำลองแจ้งเตือนทันที
+// ใช้: GET /test-notify?tracking=ED123456789TH&userId=Uxxxx
+app.get('/test-notify', async (req, res) => {
+  const { tracking, userId } = req.query;
+  if (!tracking || !userId) {
+    return res.status(400).json({ error: 'ต้องใส่ tracking และ userId' });
+  }
+  try {
+    await client.pushMessage({
+      to: userId,
+      messages: [{
+        type: 'text',
+        text: `🔔 [TEST] แจ้งเตือนพัสดุ ${tracking}\n📍 สถานะ: ทดสอบระบบแจ้งเตือน\n✅ ระบบทำงานปกติครับ`,
+      }],
+    });
+    res.json({ success: true, message: `ส่งแจ้งเตือนไปที่ ${userId} แล้ว` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Ping ตัวเองทุก 10 นาที ป้องกัน Render sleep
 cron.schedule('*/10 * * * *', async () => {
   const url = process.env.RENDER_EXTERNAL_URL;
