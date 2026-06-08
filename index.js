@@ -32,6 +32,7 @@ async function handleEvent(event) {
 
   const userText = event.message.text.trim();
   const userId = event.source.userId;
+  console.log(`[USER] userId: ${userId}`);
 
   // คำสั่ง: ดูรายการ
   if (userText === 'รายการ' || userText === 'list') {
