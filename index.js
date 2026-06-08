@@ -136,8 +136,8 @@ async function handleEvent(event) {
   }
 }
 
-// ตรวจสถานะทุก 30 นาที (batch ทุกเลขในคำขอเดียว)
-cron.schedule('*/30 * * * *', async () => {
+// ตรวจสถานะทุก 3 นาที (batch ทุกเลขในคำขอเดียว)
+cron.schedule('*/3 * * * *', async () => {
   const subs = store.getAll();
   const keys = Object.keys(subs);
   if (keys.length === 0) return;
