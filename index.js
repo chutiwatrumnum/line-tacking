@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const line = require('@line/bot-sdk');
 const cron = require('node-cron');
+const axios = require('axios');
 const { trackParcel, trackParcels } = require('./thaipost');
 const store = require('./store');
 
@@ -420,6 +421,22 @@ function buildFlexMessage(trackingNumber, items) {
     },
   };
 }
+
+// Health check endpoint สำหรับ ping ตัวเอง
+app.get('/ping', (req, res) => res.send('pong'));
+
+// Ping ตัวเองทุก 10 นาที ป้องกัน Render sleep
+cron.schedule('*/10 * * * *', async () => {
+  const url = process.env.RENDER_EXTERNAL_URL;
+  if (url) {
+    try {
+      await axios.get(`${url}/ping`);
+      console.log('[PING] Server kept alive');
+    } catch (e) {
+      console.error('[PING] Failed:', e.message);
+    }
+  }
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
