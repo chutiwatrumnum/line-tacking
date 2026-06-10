@@ -138,7 +138,13 @@ async function handleEvent(event) {
 }
 
 // ตรวจสถานะทุก 3 นาที (batch ทุกเลขในคำขอเดียว)
+// แจ้งเตือนเฉพาะ 8:00-20:00 (เวลาไทย)
 cron.schedule('*/3 * * * *', async () => {
+  const hour = new Date().toLocaleString('en-US', { timeZone: 'Asia/Bangkok', hour: 'numeric', hour12: false });
+  if (parseInt(hour) < 8 || parseInt(hour) >= 20) {
+    console.log('[CRON] Outside notify hours, skipping...');
+    return;
+  }
   const subs = store.getAll();
   const keys = Object.keys(subs);
   if (keys.length === 0) return;
