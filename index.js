@@ -36,7 +36,7 @@ async function handleEvent(event) {
 
   // คำสั่ง: ดูรายการ
   if (userText === 'รายการ' || userText === 'list') {
-    const subs = store.getAll();
+    const subs = await store.getAll();
     const myParcels = Object.entries(subs).filter(([, v]) => v.userId === userId);
     if (myParcels.length === 0) {
       return client.replyMessage({
@@ -59,9 +59,9 @@ async function handleEvent(event) {
   const cancelMatch = userText.match(/^ยกเลิก\s+([A-Z]{2}\d{9}[A-Z]{2})/i);
   if (cancelMatch) {
     const num = cancelMatch[1].toUpperCase();
-    const subs = store.getAll();
+    const subs = await store.getAll();
     if (subs[num] && subs[num].userId === userId) {
-      store.unsubscribe(num);
+      await store.unsubscribe(num);
       return client.replyMessage({
         replyToken: event.replyToken,
         messages: [{ type: 'text', text: `✅ ยกเลิกการติดตามพัสดุ ${num} แล้วครับ` }],
@@ -118,16 +118,20 @@ async function handleEvent(event) {
     if (parseInt(latest.status) >= 300) {
       notifyText = `✅ พัสดุ ${trackingNumber} นำจ่ายสำเร็จแล้วครับ`;
     } else {
-      const existing = store.getAll()[trackingNumber];
-      store.subscribe(trackingNumber, userId, latest.status);
+      const existing = (await store.getAll())[trackingNumber];
+      await store.subscribe(trackingNumber, userId, latest.status);
       notifyText = existing
         ? `🔔 อัปเดตการติดตามพัสดุ ${trackingNumber} แล้วครับ`
         : `🔔 ระบบจะแจ้งเตือนอัตโนมัติเมื่อสถานะพัสดุ ${trackingNumber} เปลี่ยนแปลงครับ`;
     }
 
-    // ส่งทีละข้อความ ป้องกัน array เกิน 5
-    await client.pushMessage({ to: userId, messages: [flexMessage] });
-    await client.pushMessage({ to: userId, messages: [{ type: 'text', text: notifyText }] });
+    // รวมเป็นคำขอเดียว: LINE นับโควต้าตาม "จำนวนคนที่ส่งถึง" ไม่ใช่จำนวนข้อความในคำขอ
+    // แยกเป็น 2 คำขอแบบเดิมจึงโดนนับ 2 ทั้งที่ส่งให้คนเดียว
+    // (ส่งได้สูงสุด 5 ข้อความต่อคำขอ ตรงนี้ใช้ 2)
+    await client.pushMessage({
+      to: userId,
+      messages: [flexMessage, { type: 'text', text: notifyText }],
+    });
   } catch (err) {
     console.error(err);
     await client.pushMessage({
@@ -145,7 +149,7 @@ cron.schedule('*/3 * * * *', async () => {
     console.log('[CRON] Outside notify hours, skipping...');
     return;
   }
-  const subs = store.getAll();
+  const subs = await store.getAll();
   const keys = Object.keys(subs);
   if (keys.length === 0) return;
 
@@ -163,7 +167,7 @@ cron.schedule('*/3 * * * *', async () => {
       if (!latest) continue;
 
       if (latest.status !== lastStatus) {
-        store.updateStatus(trackingNumber, latest.status);
+        await store.updateStatus(trackingNumber, latest.status);
         const flexMessage = buildFlexMessage(trackingNumber, result);
 
         await client.pushMessage({
@@ -179,7 +183,7 @@ cron.schedule('*/3 * * * *', async () => {
 
         // Unsubscribe if delivered
         if (parseInt(latest.status) >= 300) {
-          store.unsubscribe(trackingNumber);
+          await store.unsubscribe(trackingNumber);
           console.log(`[CRON] ${trackingNumber} delivered, unsubscribed.`);
         }
       }
