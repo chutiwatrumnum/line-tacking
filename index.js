@@ -5,6 +5,7 @@ const cron = require('node-cron');
 const axios = require('axios');
 const { trackParcel, trackParcels } = require('./thaipost');
 const store = require('./store');
+const { handleSlipImage, buildSlipReply } = require('./slips');
 
 const config = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
@@ -28,7 +29,30 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
 });
 
 async function handleEvent(event) {
-  if (event.type !== 'message' || event.message.type !== 'text') return;
+  if (event.type !== 'message') return;
+
+  // รูปที่ลูกค้าส่งมา = สลิปโอนเงิน
+  // ตอบด้วย replyMessage เท่านั้น (ฟรี ไม่กินโควต้า push)
+  if (event.message.type === 'image') {
+    try {
+      const result = await handleSlipImage({
+        messageId: event.message.id,
+        userId: event.source.userId,
+      });
+      return client.replyMessage({
+        replyToken: event.replyToken,
+        messages: [{ type: 'text', text: buildSlipReply(result) }],
+      });
+    } catch (err) {
+      console.error('[SLIP]', err.message);
+      return client.replyMessage({
+        replyToken: event.replyToken,
+        messages: [{ type: 'text', text: 'ขออภัยครับ บันทึกสลิปไม่สำเร็จ\nรบกวนส่งใหม่อีกครั้ง หรือทักหาแอดมินได้เลยครับ 🙏' }],
+      });
+    }
+  }
+
+  if (event.message.type !== 'text') return;
 
   const userText = event.message.text.trim();
   const userId = event.source.userId;
