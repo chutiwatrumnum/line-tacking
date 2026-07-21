@@ -7,6 +7,7 @@ const { trackParcel, trackParcels } = require('./thaipost');
 const store = require('./store');
 const { handleSlipImage, buildSlipReply } = require('./slips');
 const { flushNotifications } = require('./notifications');
+const { cleanupOldSlips } = require('./cleanup');
 
 const config = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
@@ -165,6 +166,15 @@ async function handleEvent(event) {
     });
   }
 }
+
+// ลบสลิปเก่าวันละครั้ง ตี 3 เวลาไทย (ช่วงคนไม่ใช้งาน)
+cron.schedule('0 20 * * *', async () => {
+  try {
+    await cleanupOldSlips();
+  } catch (err) {
+    console.error('[CLEANUP] cron error:', err.message);
+  }
+});
 
 // ส่งคิวข้อความที่หน้าแอดมินหยอดไว้ (เช่น ยืนยันเงินแล้ว)
 // รันทุก 1 นาที ไม่จำกัดเวลา เพราะลูกค้าเพิ่งส่งสลิปแล้วรออยู่
