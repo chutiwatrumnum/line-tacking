@@ -6,6 +6,7 @@ const axios = require('axios');
 const { trackParcel, trackParcels } = require('./thaipost');
 const store = require('./store');
 const { handleSlipImage, buildSlipReply } = require('./slips');
+const { flushNotifications } = require('./notifications');
 
 const config = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
@@ -164,6 +165,16 @@ async function handleEvent(event) {
     });
   }
 }
+
+// ส่งคิวข้อความที่หน้าแอดมินหยอดไว้ (เช่น ยืนยันเงินแล้ว)
+// รันทุก 1 นาที ไม่จำกัดเวลา เพราะลูกค้าเพิ่งส่งสลิปแล้วรออยู่
+cron.schedule('* * * * *', async () => {
+  try {
+    await flushNotifications(client);
+  } catch (err) {
+    console.error('[NOTIFY] cron error:', err.message);
+  }
+});
 
 // ตรวจสถานะทุก 3 นาที (batch ทุกเลขในคำขอเดียว)
 // แจ้งเตือนเฉพาะ 8:00-20:00 (เวลาไทย)
