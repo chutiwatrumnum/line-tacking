@@ -202,19 +202,29 @@ cron.schedule('*/3 * * * *', async () => {
       if (!latest) continue;
 
       if (latest.status !== lastStatus) {
+        // เก็บสถานะล่าสุดเสมอ (DB write ถูก) แต่ push เฉพาะตอน "ขึ้นกลุ่มใหม่"
+        // Thai Post status เป็นเลข: 1xx ระหว่างขนส่ง (เปลี่ยนหลายรอบตามศูนย์คัดแยก),
+        // 2xx นำจ่าย, 3xx+ สำเร็จ — จัดกลุ่มตามหลักร้อยแล้ว hop ย่อยใน 1xx ยุบเหลือครั้งเดียว
+        // ลดจาก ~5-6 push/พัสดุ เหลือ 2-3 ให้อยู่ในโควต้าฟรี
         await store.updateStatus(trackingNumber, latest.status);
-        const flexMessage = buildFlexMessage(trackingNumber, result);
 
-        await client.pushMessage({
-          to: userId,
-          messages: [
-            {
-              type: 'text',
-              text: `🔔 อัปเดตพัสดุ ${trackingNumber}\n📍 ${latest.status_description}: ${latest.location || ''}\n🕐 ${formatDate(latest.status_date)}`,
-            },
-            flexMessage,
-          ],
-        });
+        const currentTier = statusTier(latest.status);
+        const lastTier = statusTier(lastStatus);
+
+        if (currentTier > lastTier) {
+          const flexMessage = buildFlexMessage(trackingNumber, result);
+
+          await client.pushMessage({
+            to: userId,
+            messages: [
+              {
+                type: 'text',
+                text: `🔔 อัปเดตพัสดุ ${trackingNumber}\n📍 ${latest.status_description}: ${latest.location || ''}\n🕐 ${formatDate(latest.status_date)}`,
+              },
+              flexMessage,
+            ],
+          });
+        }
 
         // Unsubscribe if delivered
         if (parseInt(latest.status) >= 300) {
@@ -227,6 +237,13 @@ cron.schedule('*/3 * * * *', async () => {
     console.error(`[CRON] Batch error:`, err.message);
   }
 });
+
+// จัดกลุ่มสถานะพัสดุตามหลักร้อย เพื่อยุบ hop ย่อยที่ push ซ้ำ ๆ
+// null/ค่าอ่านไม่ได้ = -1 เพื่อให้สถานะจริงครั้งแรกนับเป็น "ขึ้นกลุ่มใหม่" เสมอ
+function statusTier(status) {
+  const n = parseInt(status);
+  return Number.isNaN(n) ? -1 : Math.floor(n / 100);
+}
 
 function extractTrackingNumber(text) {
   const match = text.match(/[A-Z]{2}\d{9}[A-Z]{2}/i);
