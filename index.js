@@ -87,12 +87,8 @@ async function handleEvent(event) {
 
   const trackingNumber = extractTrackingNumber(userText);
 
-  if (!trackingNumber) {
-    return client.replyMessage({
-      replyToken: event.replyToken,
-      messages: [{ type: 'text', text: 'ไม่พบเลขพัสดุครับ\n\nส่งเลขพัสดุ เช่น EF123456789TH\nหรือพิมพ์ "ช่วยเหลือ" เพื่อดูวิธีใช้' }],
-    });
-  }
+  // ไม่ใช่เลขพัสดุและไม่ใช่คำสั่ง → เงียบไว้ ปล่อยให้แอดมินคุยกับลูกค้าเอง
+  if (!trackingNumber) return;
 
   await client.replyMessage({
     replyToken: event.replyToken,
