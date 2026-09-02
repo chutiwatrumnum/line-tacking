@@ -5,7 +5,7 @@ const cron = require('node-cron');
 const axios = require('axios');
 const { trackParcel, trackParcels } = require('./thaipost');
 const store = require('./store');
-const { handleSlipImage, buildSlipReply, getPendingOrders, buildOrdersReply } = require('./slips');
+const { getPendingOrders, buildOrdersReply, orderLink } = require('./slips');
 const { flushNotifications } = require('./notifications');
 const { cleanupOldSlips } = require('./cleanup');
 
@@ -35,11 +35,15 @@ async function handleEvent(event) {
 
   // รูปที่ลูกค้าส่งเข้ามา
   //
-  // เดิมตีว่ารูปทุกรูปคือสลิป ลูกค้าถามเรื่องปลา ส่งรูปที่อยู่ ส่งภาพหน้าจอ
-  // ก็ได้ "ได้รับสลิปแล้วครับ" กลับไปหมด ซึ่งทั้งงงและทำให้คิวสลิปรกไปด้วยรูปที่ไม่เกี่ยว
+  // ไม่รับสลิปทางแชทแล้ว — รับที่หน้าใบสรุปทางเดียว
+  // เพราะหน้านั้นรู้ตั้งแต่แรกว่าเป็นบิลไหน ส่วนทางแชทต้องเดา และเดาได้เฉพาะ
+  // ตอนลูกค้ามีบิลค้างใบเดียว มากกว่านั้นร้านต้องมานั่งจับคู่เอง
   //
-  // จะเป็นสลิปได้ก็ต่อเมื่อมีอะไรให้จ่าย — ไม่มีบิลค้างก็เงียบไว้
-  // ปล่อยให้แอดมินคุยกับลูกค้าเอง เหมือนที่ทำกับข้อความที่ไม่ใช่คำสั่ง
+  // แต่ห้ามเงียบ คนส่งรูปสลิปมาแล้วไม่มีอะไรตอบจะเข้าใจว่าร้านได้รับแล้ว
+  // แล้วนั่งรอการยืนยันที่ไม่มีวันมา — ส่งลิงก์บิลไปให้เขาไปต่อได้เลย
+  //
+  // ไม่มีบิลค้าง = ไม่ได้กำลังจะจ่าย เงียบไว้ ปล่อยให้แอดมินคุยเอง
+  // เหมือนที่ทำกับข้อความที่ไม่ใช่คำสั่ง
   //
   // ตอบด้วย replyMessage เท่านั้น (ฟรี ไม่กินโควต้า push)
   if (event.message.type === 'image') {
@@ -52,23 +56,35 @@ async function handleEvent(event) {
     }
     if (pending.length === 0) return;
 
-    try {
-      const result = await handleSlipImage({
-        messageId: event.message.id,
-        userId: event.source.userId,
-        orders: pending,
-      });
-      return client.replyMessage({
-        replyToken: event.replyToken,
-        messages: [{ type: 'text', text: buildSlipReply(result) }],
-      });
-    } catch (err) {
-      console.error('[SLIP]', err.message);
-      return client.replyMessage({
-        replyToken: event.replyToken,
-        messages: [{ type: 'text', text: 'ขออภัยครับ บันทึกสลิปไม่สำเร็จ\nรบกวนส่งใหม่อีกครั้ง หรือทักหาแอดมินได้เลยครับ 🙏' }],
-      });
-    }
+    const lines =
+      pending.length === 1
+        ? [
+            '🧾 ถ้าเป็นสลิปโอนเงิน รบกวนแนบที่หน้าใบสรุปแทนนะครับ',
+            'ระบบจะได้รู้ว่าเป็นของบิลไหนทันที ไม่ต้องรอร้านมาจับคู่',
+            '',
+            `${pending[0].order_number} — ฿${Number(pending[0].total_amount).toLocaleString()}`,
+            orderLink(pending[0].id),
+            '',
+            'กดลิงก์ → เลื่อนหาปุ่ม "แนบสลิปโอนเงิน" ได้เลยครับ 🙏',
+          ]
+        : [
+            '🧾 ถ้าเป็นสลิปโอนเงิน รบกวนแนบที่หน้าใบสรุปของบิลนั้นนะครับ',
+            'ระบบจะได้รู้ว่าเป็นของบิลไหนทันที',
+            '',
+            'บิลที่ยังไม่ได้ชำระ:',
+            ...pending.flatMap((o) => [
+              '',
+              `${o.order_number} — ฿${Number(o.total_amount).toLocaleString()}`,
+              orderLink(o.id),
+            ]),
+            '',
+            'กดลิงก์ → เลื่อนหาปุ่ม "แนบสลิปโอนเงิน" ได้เลยครับ 🙏',
+          ];
+
+    return client.replyMessage({
+      replyToken: event.replyToken,
+      messages: [{ type: 'text', text: lines.join('\n') }],
+    });
   }
 
   if (event.message.type !== 'text') return;
@@ -167,7 +183,8 @@ async function handleEvent(event) {
           'พิมพ์: บิล',
           '',
           '💸 แจ้งโอนเงิน',
-          'ส่งรูปสลิปเข้ามาในแชทได้เลย',
+          'พิมพ์ "บิล" แล้วกดลิงก์ใบสรุป',
+          'จะมีปุ่มแนบสลิปอยู่ในนั้นครับ',
           '',
           '🔔 ระบบจะแจ้งเตือนอัตโนมัติเมื่อสถานะพัสดุเปลี่ยน',
         ].join('\n'),
