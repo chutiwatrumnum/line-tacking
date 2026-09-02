@@ -5,7 +5,7 @@ const cron = require('node-cron');
 const axios = require('axios');
 const { trackParcel, trackParcels } = require('./thaipost');
 const store = require('./store');
-const { handleSlipImage, buildSlipReply } = require('./slips');
+const { handleSlipImage, buildSlipReply, getPendingOrders, buildOrdersReply } = require('./slips');
 const { flushNotifications } = require('./notifications');
 const { cleanupOldSlips } = require('./cleanup');
 
@@ -100,13 +100,60 @@ async function handleEvent(event) {
     }
   }
 
+  // ปุ่มริชเมนู "ติดตามพัสดุ" — ปุ่มส่งเลขพัสดุแทนลูกค้าไม่ได้ ตรงนี้เลยแค่บอกให้พิมพ์ต่อ
+  if (userText === 'ติดตามพัสดุ') {
+    return client.replyMessage({
+      replyToken: event.replyToken,
+      messages: [{
+        type: 'text',
+        text: '📦 ส่งเลขพัสดุมาได้เลยครับ\nเช่น EF123456789TH\n\nระบบจะแจ้งเตือนให้อัตโนมัติเมื่อสถานะเปลี่ยน 🔔',
+      }],
+    });
+  }
+
+  // คำสั่ง: บิลค้างชำระ
+  if (userText === 'บิล' || userText === 'บิลของฉัน' || userText === 'บิลค้างชำระ') {
+    try {
+      const orders = await getPendingOrders(userId);
+      return client.replyMessage({
+        replyToken: event.replyToken,
+        messages: [{ type: 'text', text: buildOrdersReply(orders) }],
+      });
+    } catch (err) {
+      console.error('[ORDERS]', err.message);
+      return client.replyMessage({
+        replyToken: event.replyToken,
+        messages: [{ type: 'text', text: 'ขออภัยครับ ดึงข้อมูลบิลไม่สำเร็จ\nรบกวนลองใหม่อีกครั้ง หรือทักหาแอดมินได้เลยครับ 🙏' }],
+      });
+    }
+  }
+
   // คำสั่ง: ช่วยเหลือ
   if (userText === 'ช่วยเหลือ' || userText === 'help' || userText === '?') {
     return client.replyMessage({
       replyToken: event.replyToken,
       messages: [{
         type: 'text',
-        text: '📌 วิธีใช้งาน\n\n🔍 ติดตามพัสดุ\nส่งเลขพัสดุ เช่น EF123456789TH\n\n📋 ดูรายการที่ติดตาม\nพิมพ์: รายการ\n\n❌ ยกเลิกติดตาม\nพิมพ์: ยกเลิก EF123456789TH\n\n🔔 ระบบจะแจ้งเตือนอัตโนมัติเมื่อสถานะเปลี่ยน',
+        text: [
+          '📌 วิธีใช้งาน',
+          '',
+          '📦 ติดตามพัสดุ',
+          'ส่งเลขพัสดุ เช่น EF123456789TH',
+          '',
+          '📋 ดูรายการที่ติดตาม',
+          'พิมพ์: รายการ',
+          '',
+          '❌ ยกเลิกติดตาม',
+          'พิมพ์: ยกเลิก EF123456789TH',
+          '',
+          '🧾 ดูบิลค้างชำระ',
+          'พิมพ์: บิล',
+          '',
+          '💸 แจ้งโอนเงิน',
+          'ส่งรูปสลิปเข้ามาในแชทได้เลย',
+          '',
+          '🔔 ระบบจะแจ้งเตือนอัตโนมัติเมื่อสถานะพัสดุเปลี่ยน',
+        ].join('\n'),
       }],
     });
   }

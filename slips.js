@@ -33,6 +33,20 @@ async function downloadLineImage(messageId) {
   return { buffer, contentType };
 }
 
+/** บิลที่ลูกค้าคนนี้ยังไม่ได้ชำระ */
+async function getPendingOrders(userId) {
+  const { data, error } = await supabase
+    .rpc('pending_orders_for_line_user', { p_line_user_id: userId });
+
+  if (error) throw new Error(`หาบิลค้างไม่สำเร็จ: ${error.message}`);
+  return data || [];
+}
+
+/** ลิงก์ใบสรุปออเดอร์ — รูปแบบเดียวกับที่ร้านส่งให้ลูกค้าตอนปิดบิล */
+function orderLink(orderId) {
+  return `https://liff.line.me/${LIFF_ID}/o/${orderId}`;
+}
+
 /**
  * เก็บสลิปแล้วเดาว่าเป็นของบิลไหน
  * ผูกให้อัตโนมัติเฉพาะตอนที่ลูกค้ามีบิลค้างใบเดียว — มากกว่านั้นปล่อยว่างให้ร้านเลือก
@@ -49,12 +63,7 @@ async function handleSlipImage({ messageId, userId }) {
 
   if (uploadError) throw new Error(`อัปโหลดสลิปไม่สำเร็จ: ${uploadError.message}`);
 
-  const { data: pending, error: pendingError } = await supabase
-    .rpc('pending_orders_for_line_user', { p_line_user_id: userId });
-
-  if (pendingError) throw new Error(`หาบิลค้างไม่สำเร็จ: ${pendingError.message}`);
-
-  const orders = pending || [];
+  const orders = await getPendingOrders(userId);
   // ผูกอัตโนมัติเมื่อไม่มีอะไรให้กำกวม
   const matched = orders.length === 1 ? orders[0] : null;
 
@@ -97,4 +106,37 @@ function buildSlipReply({ matched, pendingCount }) {
   ].join('\n');
 }
 
-module.exports = { handleSlipImage, buildSlipReply, PUBLIC_APP_URL, LIFF_ID };
+/**
+ * ข้อความตอบปุ่ม "บิลค้างชำระ"
+ * ลิงก์ที่ร้านส่งตอนปิดบิลจมหายไปในแชทง่าย ตรงนี้ดึงกลับมาให้เอง
+ */
+function buildOrdersReply(orders) {
+  if (orders.length === 0) {
+    return [
+      '🧾 ตอนนี้ไม่มีบิลค้างชำระครับ',
+      '',
+      'ถ้าเพิ่งสั่งของแล้วยังไม่เห็นบิล รอทางร้านสรุปให้สักครู่นะครับ 🙏',
+    ].join('\n');
+  }
+
+  const lines = ['🧾 บิลที่ยังไม่ได้ชำระ'];
+  for (const o of orders) {
+    lines.push(
+      '',
+      `${o.order_number} — ฿${Number(o.total_amount).toLocaleString()}`,
+      orderLink(o.id)
+    );
+  }
+  lines.push('', 'กดลิงก์เพื่อดูรายการ ชำระเงิน และแจ้งที่อยู่ได้เลยครับ');
+  return lines.join('\n');
+}
+
+module.exports = {
+  handleSlipImage,
+  buildSlipReply,
+  getPendingOrders,
+  buildOrdersReply,
+  orderLink,
+  PUBLIC_APP_URL,
+  LIFF_ID,
+};
