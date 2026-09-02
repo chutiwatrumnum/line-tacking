@@ -51,7 +51,7 @@ function orderLink(orderId) {
  * เก็บสลิปแล้วเดาว่าเป็นของบิลไหน
  * ผูกให้อัตโนมัติเฉพาะตอนที่ลูกค้ามีบิลค้างใบเดียว — มากกว่านั้นปล่อยว่างให้ร้านเลือก
  */
-async function handleSlipImage({ messageId, userId }) {
+async function handleSlipImage({ messageId, userId, orders: knownOrders }) {
   const { buffer, contentType } = await downloadLineImage(messageId);
 
   const ext = contentType.includes('png') ? 'png' : contentType.includes('webp') ? 'webp' : 'jpg';
@@ -63,7 +63,9 @@ async function handleSlipImage({ messageId, userId }) {
 
   if (uploadError) throw new Error(`อัปโหลดสลิปไม่สำเร็จ: ${uploadError.message}`);
 
-  const orders = await getPendingOrders(userId);
+  // ผู้เรียกมักหาบิลค้างมาแล้วเพื่อตัดสินใจว่ารูปนี้ควรถือเป็นสลิปไหม
+  // รับต่อมาใช้เลย จะได้ไม่ยิงถามซ้ำ
+  const orders = knownOrders || (await getPendingOrders(userId));
   // ผูกอัตโนมัติเมื่อไม่มีอะไรให้กำกวม
   const matched = orders.length === 1 ? orders[0] : null;
 

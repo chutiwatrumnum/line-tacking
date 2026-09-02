@@ -33,13 +33,30 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
 async function handleEvent(event) {
   if (event.type !== 'message') return;
 
-  // รูปที่ลูกค้าส่งมา = สลิปโอนเงิน
+  // รูปที่ลูกค้าส่งเข้ามา
+  //
+  // เดิมตีว่ารูปทุกรูปคือสลิป ลูกค้าถามเรื่องปลา ส่งรูปที่อยู่ ส่งภาพหน้าจอ
+  // ก็ได้ "ได้รับสลิปแล้วครับ" กลับไปหมด ซึ่งทั้งงงและทำให้คิวสลิปรกไปด้วยรูปที่ไม่เกี่ยว
+  //
+  // จะเป็นสลิปได้ก็ต่อเมื่อมีอะไรให้จ่าย — ไม่มีบิลค้างก็เงียบไว้
+  // ปล่อยให้แอดมินคุยกับลูกค้าเอง เหมือนที่ทำกับข้อความที่ไม่ใช่คำสั่ง
+  //
   // ตอบด้วย replyMessage เท่านั้น (ฟรี ไม่กินโควต้า push)
   if (event.message.type === 'image') {
+    let pending;
+    try {
+      pending = await getPendingOrders(event.source.userId);
+    } catch (err) {
+      console.error('[SLIP] หาบิลค้างไม่สำเร็จ:', err.message);
+      return;
+    }
+    if (pending.length === 0) return;
+
     try {
       const result = await handleSlipImage({
         messageId: event.message.id,
         userId: event.source.userId,
+        orders: pending,
       });
       return client.replyMessage({
         replyToken: event.replyToken,
