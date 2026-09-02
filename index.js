@@ -184,7 +184,7 @@ async function handleEvent(event) {
     const flexMessage = buildFlexMessage(trackingNumber, result);
     let notifyText = '';
 
-    if (parseInt(latest.status) >= 300) {
+    if (isDelivered(latest.status)) {
       notifyText = `✅ พัสดุ ${trackingNumber} นำจ่ายสำเร็จแล้วครับ`;
     } else {
       const existing = (await store.getAll())[trackingNumber];
@@ -279,8 +279,9 @@ cron.schedule('*/3 * * * *', async () => {
           });
         }
 
-        // Unsubscribe if delivered
-        if (parseInt(latest.status) >= 300) {
+        // เลิกติดตามเมื่อถึงมือผู้รับจริงเท่านั้น
+        // เดิมเลิกตั้งแต่ 3xx (กำลังนำจ่าย) ลูกค้าเลยไม่เคยได้แจ้งตอนของถึงจริง
+        if (isDelivered(latest.status)) {
           await store.unsubscribe(trackingNumber);
           console.log(`[CRON] ${trackingNumber} delivered, unsubscribed.`);
         }
@@ -308,11 +309,30 @@ function formatDate(dateStr) {
   return dateStr.replace(/\+07:00$/, '').trim();
 }
 
+// รหัสสถานะของไปรษณีย์ไทย อ้างอิงจากที่ API คืนมาจริง ไม่ใช่การเดา
+//   1xx  รับฝาก                      103 รับฝากสิ่งของ
+//   2xx  ระหว่างขนส่ง                201 ออกจากที่ทำการ · 206 ถึงที่ทำการปลายทาง · 211 เข้าศูนย์คัดแยก
+//   3xx  อยู่ระหว่างการนำจ่าย        301 — ของอยู่กับบุรุษไปรษณีย์ ยังไม่ถึงมือผู้รับ
+//   5xx  นำจ่ายสำเร็จ                501
+//
+// เดิมโค้ดนี้ตีว่า 2xx = ออกไปนำจ่าย และ 3xx = สำเร็จ ซึ่งผิดทั้งคู่
+// ผลคือลูกค้าได้ข้อความว่าของถึงแล้วตั้งแต่ตอนพัสดุยังอยู่บนรถ
+// แล้วระบบก็เลิกติดตามต่อ ทำให้ไม่มีใครได้แจ้ง "นำจ่ายสำเร็จ" ของจริงเลย
+const DELIVERED_CODE = 500;
+
+/** ถึงมือผู้รับแล้วจริง ๆ — ไม่ใช่แค่ออกไปส่ง */
+function isDelivered(status) {
+  const code = parseInt(status);
+  return Number.isFinite(code) && code >= DELIVERED_CODE;
+}
+
 function getStatusStep(statusCode) {
   const code = parseInt(statusCode);
-  if (code >= 300) return 4;
-  if (code >= 200) return 3;
-  if (code >= 102) return 2;
+  if (!Number.isFinite(code)) return 1;
+  if (code >= DELIVERED_CODE) return 4;
+  // 4xx เป็นกลุ่มนำจ่ายไม่สำเร็จ/ตีกลับ ยังนับอยู่ขั้นนำจ่าย และยังต้องติดตามต่อ
+  if (code >= 300) return 3;
+  if (code >= 200) return 2;
   return 1;
 }
 
