@@ -369,7 +369,7 @@ async function replyMyParcels(event, userId) {
     });
   }
 
-  // ชิ้นเดียว ส่งการ์ดเต็มไปเลย มีแถบขั้นตอนให้ดูด้วย อ่านง่ายกว่าบรรทัดเปล่า
+  // ชิ้นเดียว ส่งการ์ดเต็มพร้อมประวัติการเคลื่อนไหว
   if (myNumbers.length === 1 && (items[myNumbers[0]] || []).length > 0) {
     return client.replyMessage({
       replyToken: event.replyToken,
@@ -377,24 +377,57 @@ async function replyMyParcels(event, userId) {
     });
   }
 
-  const lines = [await render('list_header', {}, '📦 พัสดุที่กำลังติดตาม:')];
-  myNumbers.forEach((num, i) => {
-    const latest = [...(items[num] || [])].reverse()[0];
-    lines.push('', `${i + 1}. ${num}`);
-    if (latest) {
-      lines.push(`   ${latest.status_description || '-'}`, `   ${formatDate(latest.status_date)}`);
-    } else {
-      lines.push('   ยังไม่มีข้อมูลจากไปรษณีย์');
-    }
-  });
+  // หลายชิ้น เรียงการ์ดให้ปัดดูทีละใบ
+  // ของเดิมตกไปเป็นข้อความเปล่า ๆ ทั้งที่ชิ้นเดียวได้การ์ดสวย ๆ
+  // กลายเป็นว่ายิ่งมีของหลายชิ้น ยิ่งดูยาก ทั้งที่ควรจะกลับกัน
+  const shown = myNumbers.slice(0, CAROUSEL_MAX);
+  const bubbles = shown.map(
+    (num) => buildParcelBubble(num, items[num] || [], true) || buildPendingBubble(num)
+  );
 
+  const messages = [{
+    type: 'flex',
+    altText: `📦 พัสดุที่กำลังติดตาม ${myNumbers.length} ชิ้น`,
+    contents: { type: 'carousel', contents: bubbles },
+  }];
+
+  // เกินที่ carousel รับได้ บอกไปตรง ๆ ว่ายังมีอีก ดีกว่าหายเงียบ
   const footer = await render('list_footer', {}, '');
-  if (footer) lines.push('', footer);
+  const extra = myNumbers.length - shown.length;
+  const note = [
+    extra > 0 ? `ยังมีอีก ${extra} ชิ้น ส่งเลขพัสดุมาเพื่อดูทีละชิ้นได้ครับ` : '',
+    footer,
+  ].filter(Boolean).join('\n');
+  if (note) messages.push({ type: 'text', text: note });
 
-  return client.replyMessage({
-    replyToken: event.replyToken,
-    messages: [{ type: 'text', text: lines.join('\n') }],
-  });
+  return client.replyMessage({ replyToken: event.replyToken, messages });
+}
+
+/** ใบสำหรับพัสดุที่ไปรษณีย์ยังไม่มีข้อมูล — ไม่งั้นการ์ดหายไปเฉย ๆ โดยไม่บอกอะไร */
+function buildPendingBubble(trackingNumber) {
+  return {
+    type: 'bubble',
+    size: 'mega',
+    header: {
+      type: 'box',
+      layout: 'vertical',
+      backgroundColor: '#999999',
+      paddingAll: 'lg',
+      contents: [
+        { type: 'text', text: '📦 ติดตามพัสดุไปรษณีย์ไทย', color: '#FFFFFF', weight: 'bold', size: 'md' },
+        { type: 'text', text: trackingNumber, color: '#EEEEEE', size: 'sm', margin: 'xs' },
+      ],
+    },
+    body: {
+      type: 'box',
+      layout: 'vertical',
+      paddingAll: 'lg',
+      contents: [
+        { type: 'text', text: 'ยังไม่มีข้อมูลจากไปรษณีย์', size: 'sm', color: '#111111', weight: 'bold', wrap: true },
+        { type: 'text', text: 'ปกติขึ้นหลังร้านนำของเข้าระบบแล้วครับ', size: 'xs', color: '#888888', margin: 'sm', wrap: true },
+      ],
+    },
+  };
 }
 
 function extractTrackingNumber(text) {
@@ -418,6 +451,9 @@ function formatDate(dateStr) {
 // แล้วระบบก็เลิกติดตามต่อ ทำให้ไม่มีใครได้แจ้ง "นำจ่ายสำเร็จ" ของจริงเลย
 const DELIVERED_CODE = 500;
 
+// LINE รับ carousel ได้สูงสุด 12 ใบ ส่งเกินนี้คือข้อความตีกลับทั้งก้อน
+const CAROUSEL_MAX = 12;
+
 /** ถึงมือผู้รับแล้วจริง ๆ — ไม่ใช่แค่ออกไปส่ง */
 function isDelivered(status) {
   const code = parseInt(status);
@@ -438,10 +474,15 @@ function stepColor(current, step) {
   return current >= step ? '#E31837' : '#CCCCCC';
 }
 
-function buildFlexMessage(trackingNumber, items) {
-  if (!items || items.length === 0) {
-    return { type: 'text', text: `ไม่พบข้อมูลพัสดุหมายเลข ${trackingNumber}` };
-  }
+/**
+ * การ์ดพัสดุหนึ่งใบ
+ *
+ * compact = ใบที่เอาไปเรียงใน carousel ตอนมีหลายชิ้น
+ * ตัดประวัติการเคลื่อนไหวออก ไม่งั้นแต่ละใบสูงไม่เท่ากันจนปัดดูลำบาก
+ * อยากดูประวัติเต็ม ส่งเลขพัสดุนั้นมาได้ ยังทำงานเหมือนเดิม
+ */
+function buildParcelBubble(trackingNumber, items, compact = false) {
+  if (!items || items.length === 0) return null;
 
   const sorted = [...items].reverse();
   const latest = sorted[0];
@@ -551,11 +592,8 @@ function buildFlexMessage(trackingNumber, items) {
   }));
 
   return {
-    type: 'flex',
-    altText: `พัสดุ ${trackingNumber}: ${latest.status_description || latest.status}`,
-    contents: {
-      type: 'bubble',
-      size: 'giga',
+    type: 'bubble',
+    size: compact ? 'mega' : 'giga',
       header: {
         type: 'box',
         layout: 'vertical',
@@ -637,22 +675,38 @@ function buildFlexMessage(trackingNumber, items) {
               }] : []),
             ],
           },
-          { type: 'separator' },
-          {
-            type: 'text',
-            text: 'ประวัติการเคลื่อนไหว',
-            weight: 'bold',
-            size: 'sm',
-            color: '#333333',
-          },
-          {
-            type: 'box',
-            layout: 'vertical',
-            contents: timelineRows,
-          },
+          ...(compact
+            ? []
+            : [
+                { type: 'separator' },
+                {
+                  type: 'text',
+                  text: 'ประวัติการเคลื่อนไหว',
+                  weight: 'bold',
+                  size: 'sm',
+                  color: '#333333',
+                },
+                {
+                  type: 'box',
+                  layout: 'vertical',
+                  contents: timelineRows,
+                },
+              ]),
         ],
       },
-    },
+  };
+}
+
+/** ห่อการ์ดใบเดียวให้เป็นข้อความพร้อมส่ง */
+function buildFlexMessage(trackingNumber, items) {
+  const bubble = buildParcelBubble(trackingNumber, items);
+  if (!bubble) return { type: 'text', text: `ไม่พบข้อมูลพัสดุหมายเลข ${trackingNumber}` };
+
+  const latest = [...items].reverse()[0];
+  return {
+    type: 'flex',
+    altText: `พัสดุ ${trackingNumber}: ${latest.status_description || latest.status}`,
+    contents: bubble,
   };
 }
 
