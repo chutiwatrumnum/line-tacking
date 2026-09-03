@@ -139,6 +139,19 @@ async function handleEvent(event) {
     }
   }
 
+  // คำสั่ง: ช่องทางติดตามร้าน
+  // ลิงก์อยู่ในข้อความที่ร้านแก้เองได้ ไม่ได้ฝังในโค้ด — เพิ่มเพจใหม่ไม่ต้อง deploy
+  // LINE ทำ URL ในข้อความให้กดได้อยู่แล้ว ไม่ต้องทำเป็นปุ่ม
+  if (userText === 'ช่องทางติดตาม' || userText === 'ช่องทาง' || userText === 'ติดตามร้าน' || userText === 'เพจร้าน') {
+    const text = await render('cmd_channels', {}, '');
+    // ยังไม่ได้ตั้งค่า = เงียบไว้ ดีกว่าส่งข้อความเปล่าให้ลูกค้างง
+    if (!text) return;
+    return client.replyMessage({
+      replyToken: event.replyToken,
+      messages: [{ type: 'text', text }],
+    });
+  }
+
   // คำสั่ง: ช่วยเหลือ
   if (userText === 'ช่วยเหลือ' || userText === 'help' || userText === '?') {
     return client.replyMessage({
