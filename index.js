@@ -32,6 +32,15 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
 });
 
 async function handleEvent(event) {
+  // ปุ่ม "ดูประวัติทั้งหมด" บนการ์ดตอนมีหลายชิ้น
+  // ใช้ postback ไม่ใช่ให้ปุ่มส่งเลขพัสดุเป็นข้อความ เพราะ postback ตอบด้วย reply ได้ (ฟรี)
+  // ส่วนทางที่ลูกค้าพิมพ์เลขเองต้องตอบรับก่อนแล้วค่อย push ซึ่งกินโควต้า
+  if (event.type === 'postback') {
+    const detail = (event.postback?.data || '').match(/^detail:([A-Z]{2}\d{9}[A-Z]{2})$/i);
+    if (detail) return replyParcelDetail(event, detail[1].toUpperCase());
+    return;
+  }
+
   if (event.type !== 'message') return;
 
   // รูปที่ลูกค้าส่งเข้ามา
@@ -403,6 +412,27 @@ async function replyMyParcels(event, userId) {
   return client.replyMessage({ replyToken: event.replyToken, messages });
 }
 
+/** กดดูประวัติจากการ์ดในชุด — ตอบการ์ดเต็มกลับไปใบเดียว */
+async function replyParcelDetail(event, trackingNumber) {
+  try {
+    const items = await trackParcel(trackingNumber);
+    return client.replyMessage({
+      replyToken: event.replyToken,
+      messages: [buildFlexMessage(trackingNumber, items)],
+    });
+  } catch (err) {
+    console.error('[DETAIL]', err.message);
+    return client.replyMessage({
+      replyToken: event.replyToken,
+      messages: [{
+        type: 'text',
+        text: await render('track_error', { tracking: trackingNumber },
+          'ตอนนี้ดึงข้อมูลจากไปรษณีย์ไม่ได้ รบกวนลองใหม่อีกครั้งครับ 🙏'),
+      }],
+    });
+  }
+}
+
 /** ใบสำหรับพัสดุที่ไปรษณีย์ยังไม่มีข้อมูล — ไม่งั้นการ์ดหายไปเฉย ๆ โดยไม่บอกอะไร */
 function buildPendingBubble(trackingNumber) {
   return {
@@ -694,6 +724,30 @@ function buildParcelBubble(trackingNumber, items, compact = false) {
               ]),
         ],
       },
+    // ใบในชุดตัดประวัติออกไป ต้องมีทางกลับไปดูให้ได้ในกดเดียว
+    // ไม่งั้นลูกค้าต้องก๊อปเลขพัสดุออกจากการ์ดไปพิมพ์เอง ซึ่งคือปัญหาเดิมที่เพิ่งแก้ไป
+    ...(compact
+      ? {
+          footer: {
+            type: 'box',
+            layout: 'vertical',
+            paddingAll: 'md',
+            contents: [
+              {
+                type: 'button',
+                style: 'secondary',
+                height: 'sm',
+                action: {
+                  type: 'postback',
+                  label: 'ดูประวัติทั้งหมด',
+                  data: `detail:${trackingNumber}`,
+                  displayText: `ดูประวัติ ${trackingNumber}`,
+                },
+              },
+            ],
+          },
+        }
+      : {}),
   };
 }
 
