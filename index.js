@@ -93,7 +93,9 @@ async function handleEvent(event) {
   const userId = event.source.userId;
 
   // คำสั่ง: ดูรายการ
-  if (userText === 'รายการ' || userText === 'list') {
+  // รับ "รายการติดตาม" ด้วย เพราะเป็นข้อความที่เขียนอยู่บนปุ่มริชเมนู
+  // คนตั้งปุ่มย่อมพิมพ์ตามป้าย ไม่มีใครเดาได้ว่าต้องตัดคำว่า "ติดตาม" ออก
+  if (userText === 'รายการ' || userText === 'รายการติดตาม' || userText === 'list') {
     const subs = await store.getAll();
     const myParcels = Object.entries(subs).filter(([, v]) => v.userId === userId);
     if (myParcels.length === 0) {
