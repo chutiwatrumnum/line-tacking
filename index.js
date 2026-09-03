@@ -8,6 +8,7 @@ const store = require('./store');
 const { getPendingOrders, buildOrdersReply, orderLink } = require('./slips');
 const { flushNotifications } = require('./notifications');
 const { cleanupOldSlips, cleanupOrphanFiles } = require('./cleanup');
+const { render } = require('./templates');
 
 const config = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
@@ -59,8 +60,7 @@ async function handleEvent(event) {
     const lines =
       pending.length === 1
         ? [
-            '🧾 ถ้าเป็นสลิปโอนเงิน รบกวนแนบที่หน้าใบสรุปแทนนะครับ',
-            'ระบบจะได้รู้ว่าเป็นของบิลไหนทันที ไม่ต้องรอร้านมาจับคู่',
+            await render('slip_via_chat', {}, '🧾 ถ้าเป็นสลิปโอนเงิน รบกวนแนบที่หน้าใบสรุปแทนนะครับ'),
             '',
             `${pending[0].order_number} — ฿${Number(pending[0].total_amount).toLocaleString()}`,
             orderLink(pending[0].id),
@@ -68,8 +68,7 @@ async function handleEvent(event) {
             'กดลิงก์ → เลื่อนหาปุ่ม "แนบสลิปโอนเงิน" ได้เลยครับ 🙏',
           ]
         : [
-            '🧾 ถ้าเป็นสลิปโอนเงิน รบกวนแนบที่หน้าใบสรุปของบิลนั้นนะครับ',
-            'ระบบจะได้รู้ว่าเป็นของบิลไหนทันที',
+            await render('slip_via_chat', {}, '🧾 ถ้าเป็นสลิปโอนเงิน รบกวนแนบที่หน้าใบสรุปของบิลนั้นนะครับ'),
             '',
             'บิลที่ยังไม่ได้ชำระ:',
             ...pending.flatMap((o) => [
@@ -101,14 +100,14 @@ async function handleEvent(event) {
     if (myParcels.length === 0) {
       return client.replyMessage({
         replyToken: event.replyToken,
-        messages: [{ type: 'text', text: '📭 ไม่มีพัสดุที่กำลังติดตามอยู่ครับ\nส่งเลขพัสดุมาได้เลย' }],
+        messages: [{ type: 'text', text: await render('list_empty', {}, '📭 ไม่มีพัสดุที่กำลังติดตามอยู่ครับ') }],
       });
     }
-    const lines = ['📦 พัสดุที่กำลังติดตาม:\n'];
+    const lines = [await render('list_header', {}, '📦 พัสดุที่กำลังติดตาม:'), ''];
     myParcels.forEach(([num], i) => {
       lines.push(`${i + 1}. ${num}`);
     });
-    lines.push('\nพิมพ์ "ยกเลิก [เลขพัสดุ]" เพื่อหยุดติดตาม');
+    lines.push('', await render('list_footer', {}, ''));
     return client.replyMessage({
       replyToken: event.replyToken,
       messages: [{ type: 'text', text: lines.join('\n') }],
@@ -124,12 +123,12 @@ async function handleEvent(event) {
       await store.unsubscribe(num);
       return client.replyMessage({
         replyToken: event.replyToken,
-        messages: [{ type: 'text', text: `✅ ยกเลิกการติดตามพัสดุ ${num} แล้วครับ` }],
+        messages: [{ type: 'text', text: await render('cancel_ok', { tracking: num }, `✅ ยกเลิกการติดตามพัสดุ ${num} แล้วครับ`) }],
       });
     } else {
       return client.replyMessage({
         replyToken: event.replyToken,
-        messages: [{ type: 'text', text: `ไม่พบพัสดุ ${num} ในรายการติดตามของคุณครับ` }],
+        messages: [{ type: 'text', text: await render('cancel_not_found', { tracking: num }, `ไม่พบพัสดุ ${num} ในรายการติดตามของคุณครับ`) }],
       });
     }
   }
@@ -140,7 +139,7 @@ async function handleEvent(event) {
       replyToken: event.replyToken,
       messages: [{
         type: 'text',
-        text: '📦 ส่งเลขพัสดุมาได้เลยครับ\nเช่น EF123456789TH\n\nระบบจะแจ้งเตือนให้อัตโนมัติเมื่อสถานะเปลี่ยน 🔔',
+        text: await render('cmd_track_prompt', {}, '📦 ส่งเลขพัสดุมาได้เลยครับ'),
       }],
     });
   }
@@ -151,7 +150,7 @@ async function handleEvent(event) {
       const orders = await getPendingOrders(userId);
       return client.replyMessage({
         replyToken: event.replyToken,
-        messages: [{ type: 'text', text: buildOrdersReply(orders) }],
+        messages: [{ type: 'text', text: await buildOrdersReply(orders) }],
       });
     } catch (err) {
       console.error('[ORDERS]', err.message);
@@ -168,27 +167,7 @@ async function handleEvent(event) {
       replyToken: event.replyToken,
       messages: [{
         type: 'text',
-        text: [
-          '📌 วิธีใช้งาน',
-          '',
-          '📦 ติดตามพัสดุ',
-          'ส่งเลขพัสดุ เช่น EF123456789TH',
-          '',
-          '📋 ดูรายการที่ติดตาม',
-          'พิมพ์: รายการ',
-          '',
-          '❌ ยกเลิกติดตาม',
-          'พิมพ์: ยกเลิก EF123456789TH',
-          '',
-          '🧾 ดูบิลค้างชำระ',
-          'พิมพ์: บิล',
-          '',
-          '💸 แจ้งโอนเงิน',
-          'พิมพ์ "บิล" แล้วกดลิงก์ใบสรุป',
-          'จะมีปุ่มแนบสลิปอยู่ในนั้นครับ',
-          '',
-          '🔔 ระบบจะแจ้งเตือนอัตโนมัติเมื่อสถานะพัสดุเปลี่ยน',
-        ].join('\n'),
+        text: await render('cmd_help', {}, '📌 พิมพ์เลขพัสดุเพื่อติดตาม หรือ "บิล" เพื่อดูบิลค้างชำระครับ'),
       }],
     });
   }
@@ -212,7 +191,7 @@ async function handleEvent(event) {
     if (!latest) {
       return await client.pushMessage({
         to: userId,
-        messages: [{ type: 'text', text: `ไม่พบข้อมูลพัสดุ ${trackingNumber} ครับ\nกรุณาตรวจสอบเลขพัสดุอีกครั้ง` }],
+        messages: [{ type: 'text', text: await render('track_not_found', { tracking: trackingNumber }, `ไม่พบข้อมูลพัสดุ ${trackingNumber} ครับ`) }],
       });
     }
 
@@ -220,13 +199,13 @@ async function handleEvent(event) {
     let notifyText = '';
 
     if (isDelivered(latest.status)) {
-      notifyText = `✅ พัสดุ ${trackingNumber} นำจ่ายสำเร็จแล้วครับ`;
+      notifyText = await render('parcel_delivered', { tracking: trackingNumber }, `✅ พัสดุ ${trackingNumber} นำจ่ายสำเร็จแล้วครับ`);
     } else {
       const existing = (await store.getAll())[trackingNumber];
       await store.subscribe(trackingNumber, userId, latest.status);
       notifyText = existing
         ? `🔔 อัปเดตการติดตามพัสดุ ${trackingNumber} แล้วครับ`
-        : `🔔 ระบบจะแจ้งเตือนอัตโนมัติเมื่อสถานะพัสดุ ${trackingNumber} เปลี่ยนแปลงครับ`;
+        : await render('track_subscribed', { tracking: trackingNumber }, `🔔 ระบบจะแจ้งเตือนอัตโนมัติเมื่อสถานะพัสดุ ${trackingNumber} เปลี่ยนแปลงครับ`);
     }
 
     // รวมเป็นคำขอเดียว: LINE นับโควต้าตาม "จำนวนคนที่ส่งถึง" ไม่ใช่จำนวนข้อความในคำขอ
@@ -240,7 +219,7 @@ async function handleEvent(event) {
     console.error(err);
     await client.pushMessage({
       to: userId,
-      messages: [{ type: 'text', text: `ไม่สามารถตรวจสอบพัสดุ ${trackingNumber} ได้\nกรุณาลองใหม่อีกครั้ง` }],
+      messages: [{ type: 'text', text: await render('track_error', { tracking: trackingNumber }, `ไม่สามารถตรวจสอบพัสดุ ${trackingNumber} ได้`) }],
     });
   }
 }
@@ -320,7 +299,16 @@ cron.schedule('*/3 * * * *', async () => {
             messages: [
               {
                 type: 'text',
-                text: `🔔 อัปเดตพัสดุ ${trackingNumber}\n📍 ${latest.status_description}: ${latest.location || ''}\n🕐 ${formatDate(latest.status_date)}`,
+                text: await render(
+                  'parcel_update',
+                  {
+                    tracking: trackingNumber,
+                    status: latest.status_description,
+                    location: latest.location || '',
+                    time: formatDate(latest.status_date),
+                  },
+                  `🔔 อัปเดตพัสดุ ${trackingNumber}`
+                ),
               },
               flexMessage,
             ],

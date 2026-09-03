@@ -9,6 +9,7 @@
 // ระบบที่เชื่อ OCR คือระบบที่ยืนยันสลิปปลอมให้เอง คนต้องเป็นคนกดยืนยัน
 
 const { createClient } = require('@supabase/supabase-js');
+const { render } = require('./templates');
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -36,13 +37,9 @@ function orderLink(orderId) {
  * ข้อความตอบปุ่ม "บิลค้างชำระ"
  * ลิงก์ที่ร้านส่งตอนปิดบิลจมหายไปในแชทง่าย ตรงนี้ดึงกลับมาให้เอง
  */
-function buildOrdersReply(orders) {
+async function buildOrdersReply(orders) {
   if (orders.length === 0) {
-    return [
-      '🧾 ตอนนี้ไม่มีบิลค้างชำระครับ',
-      '',
-      'ถ้าเพิ่งสั่งของแล้วยังไม่เห็นบิล รอทางร้านสรุปให้สักครู่นะครับ 🙏',
-    ].join('\n');
+    return render('bills_empty', {}, '🧾 ตอนนี้ไม่มีบิลค้างชำระครับ');
   }
 
   const lines = ['🧾 บิลที่ยังไม่ได้ชำระ'];
@@ -53,7 +50,7 @@ function buildOrdersReply(orders) {
       orderLink(o.id)
     );
   }
-  lines.push('', 'กดลิงก์เพื่อดูรายการ ชำระเงิน และแจ้งที่อยู่ได้เลยครับ');
+  lines.push('', await render('bills_footer', {}, ''));
   return lines.join('\n');
 }
 
