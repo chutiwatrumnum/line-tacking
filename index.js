@@ -91,27 +91,16 @@ async function handleEvent(event) {
   const userText = event.message.text.trim();
   const userId = event.source.userId;
 
-  // คำสั่ง: ดูรายการ
-  // รับ "รายการติดตาม" ด้วย เพราะเป็นข้อความที่เขียนอยู่บนปุ่มริชเมนู
-  // คนตั้งปุ่มย่อมพิมพ์ตามป้าย ไม่มีใครเดาได้ว่าต้องตัดคำว่า "ติดตาม" ออก
-  if (userText === 'รายการ' || userText === 'รายการติดตาม' || userText === 'list') {
-    const subs = await store.getAll();
-    const myParcels = Object.entries(subs).filter(([, v]) => v.userId === userId);
-    if (myParcels.length === 0) {
-      return client.replyMessage({
-        replyToken: event.replyToken,
-        messages: [{ type: 'text', text: await render('list_empty', {}, '📭 ไม่มีพัสดุที่กำลังติดตามอยู่ครับ') }],
-      });
-    }
-    const lines = [await render('list_header', {}, '📦 พัสดุที่กำลังติดตาม:'), ''];
-    myParcels.forEach(([num], i) => {
-      lines.push(`${i + 1}. ${num}`);
-    });
-    lines.push('', await render('list_footer', {}, ''));
-    return client.replyMessage({
-      replyToken: event.replyToken,
-      messages: [{ type: 'text', text: lines.join('\n') }],
-    });
+  // คำสั่ง: พัสดุของฉัน — กดเดียวรู้เลยว่าของถึงไหน
+  // รับคำที่เคยเขียนอยู่บนปุ่มริชเมนูไว้ทั้งหมด ปุ่มเก่ายังกดได้เหมือนเดิม
+  if (
+    userText === 'พัสดุของฉัน' ||
+    userText === 'รายการ' ||
+    userText === 'รายการติดตาม' ||
+    userText === 'ติดตามพัสดุ' ||
+    userText === 'list'
+  ) {
+    return replyMyParcels(event, userId);
   }
 
   // คำสั่ง: ยกเลิกติดตาม
@@ -131,17 +120,6 @@ async function handleEvent(event) {
         messages: [{ type: 'text', text: await render('cancel_not_found', { tracking: num }, `ไม่พบพัสดุ ${num} ในรายการติดตามของคุณครับ`) }],
       });
     }
-  }
-
-  // ปุ่มริชเมนู "ติดตามพัสดุ" — ปุ่มส่งเลขพัสดุแทนลูกค้าไม่ได้ ตรงนี้เลยแค่บอกให้พิมพ์ต่อ
-  if (userText === 'ติดตามพัสดุ') {
-    return client.replyMessage({
-      replyToken: event.replyToken,
-      messages: [{
-        type: 'text',
-        text: await render('cmd_track_prompt', {}, '📦 ส่งเลขพัสดุมาได้เลยครับ'),
-      }],
-    });
   }
 
   // คำสั่ง: บิลค้างชำระ
@@ -333,6 +311,77 @@ cron.schedule('*/3 * * * *', async () => {
 function statusTier(status) {
   const n = parseInt(status);
   return Number.isNaN(n) ? -1 : Math.floor(n / 100);
+}
+
+/**
+ * ตอบว่าพัสดุของลูกค้าอยู่ไหนแล้ว จบในกดเดียว
+ *
+ * เดิมแยกเป็นสองปุ่ม แล้วไม่มีปุ่มไหนตอบคำถามนี้ได้จริง
+ *   "ติดตามพัสดุ"   ตอบว่าให้พิมพ์เลขมา — ปุ่มริชเมนูส่งข้อความตายตัว
+ *                   ส่งเลขแทนลูกค้าไม่ได้ ปุ่มจึงทำได้แค่สั่งให้ลูกค้าพิมพ์เอง
+ *   "รายการติดตาม"  ตอบมาเป็นเลขพัสดุเปล่า ๆ ไม่มีสถานะ
+ *                   ต้องก๊อปเลขจากคำตอบส่งกลับเข้ามาอีกที ถึงจะรู้ว่าของอยู่ไหน
+ *
+ * ลูกค้าไม่เคยพิมพ์เลขเอง ร้านเป็นคนใส่ตอนส่งของแล้วระบบผูกให้เอง
+ * แจ้งเตือนอัตโนมัติเด้งเฉพาะตอนสถานะเปลี่ยน — ช่วงที่ยังไม่เปลี่ยนคือช่วงที่คนเปิดมาเช็กเอง
+ * ตรงนั้นแหละที่ต้องตอบให้ได้
+ *
+ * ยิง API ไปรษณีย์ครั้งเดียวต่อการกด ไม่ว่าจะติดตามอยู่กี่ชิ้น
+ */
+async function replyMyParcels(event, userId) {
+  const subs = await store.getAll();
+  const myNumbers = Object.entries(subs)
+    .filter(([, v]) => v.userId === userId)
+    .map(([num]) => num);
+
+  if (myNumbers.length === 0) {
+    return client.replyMessage({
+      replyToken: event.replyToken,
+      messages: [{ type: 'text', text: await render('list_empty', {}, '📭 ไม่มีพัสดุที่กำลังติดตามอยู่ครับ') }],
+    });
+  }
+
+  let items;
+  try {
+    items = await trackParcels(myNumbers);
+  } catch (err) {
+    // ไปรษณีย์ล่มก็ยังบอกได้ว่ากำลังตามเลขอะไรอยู่ ดีกว่าเงียบใส่ลูกค้า
+    console.error('[MY_PARCELS]', err.message);
+    const lines = [await render('list_header', {}, '📦 พัสดุที่กำลังติดตาม:'), ''];
+    myNumbers.forEach((num, i) => lines.push(`${i + 1}. ${num}`));
+    lines.push('', 'ตอนนี้ดึงสถานะจากไปรษณีย์ไม่ได้ รบกวนลองใหม่อีกครั้งครับ 🙏');
+    return client.replyMessage({
+      replyToken: event.replyToken,
+      messages: [{ type: 'text', text: lines.join('\n') }],
+    });
+  }
+
+  // ชิ้นเดียว ส่งการ์ดเต็มไปเลย มีแถบขั้นตอนให้ดูด้วย อ่านง่ายกว่าบรรทัดเปล่า
+  if (myNumbers.length === 1 && (items[myNumbers[0]] || []).length > 0) {
+    return client.replyMessage({
+      replyToken: event.replyToken,
+      messages: [buildFlexMessage(myNumbers[0], items[myNumbers[0]])],
+    });
+  }
+
+  const lines = [await render('list_header', {}, '📦 พัสดุที่กำลังติดตาม:')];
+  myNumbers.forEach((num, i) => {
+    const latest = [...(items[num] || [])].reverse()[0];
+    lines.push('', `${i + 1}. ${num}`);
+    if (latest) {
+      lines.push(`   ${latest.status_description || '-'}`, `   ${formatDate(latest.status_date)}`);
+    } else {
+      lines.push('   ยังไม่มีข้อมูลจากไปรษณีย์');
+    }
+  });
+
+  const footer = await render('list_footer', {}, '');
+  if (footer) lines.push('', footer);
+
+  return client.replyMessage({
+    replyToken: event.replyToken,
+    messages: [{ type: 'text', text: lines.join('\n') }],
+  });
 }
 
 function extractTrackingNumber(text) {
