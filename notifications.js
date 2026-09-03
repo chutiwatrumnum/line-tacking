@@ -20,7 +20,7 @@ const supabase = createClient(
 async function flushNotifications(client) {
   const { data: pending, error } = await supabase
     .from('line_notifications')
-    .select('id, line_user_id, message')
+    .select('id, line_user_id, message, images')
     .eq('status', 'pending')
     .order('created_at', { ascending: true })
     .limit(20);
@@ -33,10 +33,21 @@ async function flushNotifications(client) {
 
   for (const row of pending) {
     try {
-      await client.pushMessage({
-        to: row.line_user_id,
-        messages: [{ type: 'text', text: row.message }],
-      });
+      // ข้อความกับรูปไปด้วยกันในคำขอเดียว ไม่ยิงแยกทีละชิ้น
+      // LINE รับได้ 5 ชิ้นต่อคำขอ ตัดส่วนเกินทิ้งดีกว่าให้ทั้งก้อนพัง
+      //
+      // รูปต้องเป็น URL สาธารณะ LINE ไปดึงเองโดยไม่มี auth
+      // previewImageUrl ใช้รูปเดียวกัน — รูปประกาศไม่ได้ใหญ่จนต้องทำ thumbnail แยก
+      const messages = [
+        { type: 'text', text: row.message },
+        ...(row.images || []).map((url) => ({
+          type: 'image',
+          originalContentUrl: url,
+          previewImageUrl: url,
+        })),
+      ].slice(0, 5);
+
+      await client.pushMessage({ to: row.line_user_id, messages });
 
       await supabase
         .from('line_notifications')
