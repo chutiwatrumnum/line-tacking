@@ -657,7 +657,12 @@ function buildFlexMessage(trackingNumber, items) {
 }
 
 // Health check endpoint สำหรับ ping ตัวเอง
-app.get('/ping', (req, res) => res.send('pong'));
+// เช็กว่าโค้ดที่รันอยู่คือคอมมิตไหน — ping เฉย ๆ บอกได้แค่ว่าเซิร์ฟเวอร์ไม่ตาย
+// แต่ไม่บอกว่า deploy ใหม่ขึ้นหรือยัง ที่ผ่านมาต้องเดาเอาทุกครั้ง
+// RENDER_GIT_COMMIT เป็นตัวแปรที่ Render ใส่ให้เอง
+app.get('/ping', (req, res) =>
+  res.send(`pong ${(process.env.RENDER_GIT_COMMIT || 'local').slice(0, 7)}`)
+);
 
 // Ping ตัวเองทุก 10 นาที ป้องกัน Render sleep
 cron.schedule('*/10 * * * *', async () => {
