@@ -266,10 +266,22 @@ cron.schedule('* * * * *', async () => {
 });
 
 // ตรวจสถานะทุก 3 นาที (batch ทุกเลขในคำขอเดียว)
-// แจ้งเตือนเฉพาะ 8:00-20:00 (เวลาไทย)
+// แจ้งเตือนเฉพาะ 8:00-23:00 (เวลาไทย)
+//
+// เวลาไทย ไม่ใช่เวลาเครื่อง — Render รันที่ UTC ถ้าอ่านชั่วโมงจากเครื่องตรง ๆ
+// ช่วงที่เงียบจะเลื่อนไป 7 ชั่วโมง กลายเป็นเงียบกลางวันแล้วไปแจ้งตอนดึกแทน
+const NOTIFY_FROM_HOUR = 8;
+const NOTIFY_TO_HOUR = 23;
+
+function inNotifyHours() {
+  const hour = parseInt(
+    new Date().toLocaleString('en-US', { timeZone: 'Asia/Bangkok', hour: 'numeric', hour12: false })
+  );
+  return hour >= NOTIFY_FROM_HOUR && hour < NOTIFY_TO_HOUR;
+}
+
 cron.schedule('*/3 * * * *', async () => {
-  const hour = new Date().toLocaleString('en-US', { timeZone: 'Asia/Bangkok', hour: 'numeric', hour12: false });
-  if (parseInt(hour) < 8 || parseInt(hour) >= 20) {
+  if (!inNotifyHours()) {
     console.log('[CRON] Outside notify hours, skipping...');
     return;
   }
