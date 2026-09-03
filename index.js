@@ -7,7 +7,7 @@ const { trackParcel, trackParcels } = require('./thaipost');
 const store = require('./store');
 const { getPendingOrders, buildOrdersReply, orderLink } = require('./slips');
 const { flushNotifications } = require('./notifications');
-const { cleanupOldSlips } = require('./cleanup');
+const { cleanupOldSlips, cleanupOrphanFiles } = require('./cleanup');
 
 const config = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
@@ -247,6 +247,7 @@ async function handleEvent(event) {
 cron.schedule('0 20 * * *', async () => {
   try {
     await cleanupOldSlips();
+    await cleanupOrphanFiles();
   } catch (err) {
     console.error('[CLEANUP] cron error:', err.message);
   }
