@@ -291,10 +291,18 @@ cron.schedule('*/3 * * * *', async () => {
       const currentTier = statusTier(latest.status);
       const lastTier = statusTier(lastStatus);
 
-      // เทียบว่า "เปลี่ยนขั้น" ไม่ใช่ "ขั้นสูงขึ้น" — นำจ่ายไม่สำเร็จแล้ววนกลับ
-      // มานำจ่ายใหม่ (4 → 3) เป็นการถอยหลัง ซึ่งลูกค้าต้องรู้พอ ๆ กัน
+      // ครั้งแรกที่เห็นพัสดุใบนี้ ส่งการ์ดเสมอไม่ว่าจะอยู่ขั้นไหน
+      //
+      // sync_parcel_subscription แทรกแถวโดยไม่ใส่ last_status (= null → ขั้น -1)
+      // ถ้าร้านคีย์เลขช้ากว่าที่ไปรษณีย์สแกนขั้นแรกไปแล้ว ขั้น 1 จะถูกข้ามทั้งขั้น
+      // ลูกค้าเลยไม่ได้การ์ดสักใบจนกว่าจะถึงนำจ่าย ทั้งที่เพิ่งได้เลขพัสดุไปหมาด ๆ
+      // ไม่ได้เพิ่มโควต้า เพราะแทนที่การ์ดใบแรกที่ควรได้อยู่แล้วแต่ไม่เคยได้
+      const firstSighting = lastTier < 0;
+
+      // นอกจากนั้นเทียบว่า "เปลี่ยนขั้น" ไม่ใช่ "ขั้นสูงขึ้น" — นำจ่ายไม่สำเร็จ
+      // แล้ววนกลับมานำจ่ายใหม่ (4 → 3) เป็นการถอยหลัง ซึ่งลูกค้าต้องรู้พอ ๆ กัน
       // hop ย่อยในขั้นเดียวกัน (201 → 206 → 211) ยังยุบเหลือครั้งเดียวเหมือนเดิม
-      if (currentTier !== lastTier && tiers.includes(currentTier)) {
+      if (firstSighting || (currentTier !== lastTier && tiers.includes(currentTier))) {
         if (!pending.has(userId)) pending.set(userId, []);
         pending.get(userId).push({ trackingNumber, latest, result });
       }
