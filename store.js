@@ -82,4 +82,33 @@ async function updateStatus(trackingNumber, newStatus) {
   if (error) throw new Error(`updateStatus ล้มเหลว: ${error.message}`);
 }
 
-module.exports = { subscribe, unsubscribe, getAll, updateStatus };
+/**
+ * ขั้นสถานะที่ร้านเลือกให้แจ้งเตือน (ตั้งได้จากหน้าตั้งค่า ไม่ต้อง deploy)
+ *
+ * แคชสั้น ๆ เพราะ cron เรียกทุก 3 นาที ไม่จำเป็นต้องยิงฐานข้อมูลทุกรอบ
+ * อ่านไม่ได้ = คืน null ให้ผู้เรียกใช้ค่าเริ่มต้นในโค้ด ดีกว่าเงียบใส่ลูกค้า
+ */
+let tierCache = null;
+let tierCachedAt = 0;
+const TIER_CACHE_MS = 5 * 60 * 1000;
+
+async function getPushTiers() {
+  if (tierCache && Date.now() - tierCachedAt < TIER_CACHE_MS) return tierCache;
+
+  const { data, error } = await supabase
+    .from('settings')
+    .select('parcel_push_tiers')
+    .limit(1)
+    .maybeSingle();
+
+  if (error || !data?.parcel_push_tiers) {
+    if (error) console.error('[STORE] อ่าน parcel_push_tiers ไม่สำเร็จ:', error.message);
+    return tierCache;
+  }
+
+  tierCache = data.parcel_push_tiers;
+  tierCachedAt = Date.now();
+  return tierCache;
+}
+
+module.exports = { subscribe, unsubscribe, getAll, updateStatus, getPushTiers };

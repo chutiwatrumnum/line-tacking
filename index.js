@@ -244,26 +244,17 @@ cron.schedule('* * * * *', async () => {
   }
 });
 
-// ตรวจสถานะทุก 3 นาที (batch ทุกเลขในคำขอเดียว)
-// แจ้งเตือนเฉพาะ 6:00-23:00 (เวลาไทย)
+// ตรวจสถานะทุก 3 นาที ตลอด 24 ชั่วโมง (batch ทุกเลขในคำขอเดียว)
 //
-// เวลาไทย ไม่ใช่เวลาเครื่อง — Render รันที่ UTC ถ้าอ่านชั่วโมงจากเครื่องตรง ๆ
-// ช่วงที่เงียบจะเลื่อนไป 7 ชั่วโมง กลายเป็นเงียบกลางวันแล้วไปแจ้งตอนดึกแทน
-const NOTIFY_FROM_HOUR = 6;
-const NOTIFY_TO_HOUR = 23;
-
-function inNotifyHours() {
-  const hour = parseInt(
-    new Date().toLocaleString('en-US', { timeZone: 'Asia/Bangkok', hour: 'numeric', hour12: false })
-  );
-  return hour >= NOTIFY_FROM_HOUR && hour < NOTIFY_TO_HOUR;
-}
+// เดิมหยุดตอนกลางคืน ซึ่งไม่ได้แค่ทำให้ช้า — มันทำข้อความหาย
+// ตอนปิด cron ไม่แตะ last_status เลย พอเช้ามาเทียบทีเดียวจึงเห็นแค่ขั้นสุดท้าย
+// พัสดุที่ออกไปนำจ่ายตี 5 แล้วถึงมือตอน 7 โมง ลูกค้าได้แค่ "นำจ่ายสำเร็จ"
+// ไม่เคยได้ "กำลังนำจ่าย" ซึ่งเป็นอันเดียวที่บอกให้อยู่บ้านรอรับปลาเป็น
+//
+// เปิดตลอดไม่ได้แปลว่าเปลืองขึ้น จำนวนขั้นที่แจ้งเท่าเดิม แค่ตรงเวลาขึ้น
+const NOTIFY_TIERS_DEFAULT = [1, 3, 5];
 
 cron.schedule('*/3 * * * *', async () => {
-  if (!inNotifyHours()) {
-    console.log('[CRON] Outside notify hours, skipping...');
-    return;
-  }
   const subs = await store.getAll();
   const keys = Object.keys(subs);
   if (keys.length === 0) return;
@@ -271,8 +262,16 @@ cron.schedule('*/3 * * * *', async () => {
   console.log(`[CRON] Batch checking ${keys.length} parcel(s) in 1 API call...`);
 
   try {
+    const tiers = (await store.getPushTiers()) || NOTIFY_TIERS_DEFAULT;
+
     // 1 API call สำหรับทุกเลขพัสดุ
     const allResults = await trackParcels(keys);
+
+    // เก็บของลูกค้าคนเดียวกันไว้ก่อน แล้วส่งทีเดียวตอนจบ
+    // LINE นับโควต้าตามจำนวนคนรับ ไม่ใช่จำนวนข้อความ — คนที่มี 3 กล่อง
+    // ขยับพร้อมกันจึงควรเสีย 1 ไม่ใช่ 3 (ร้านมักส่งหลายกล่องพร้อมกัน
+    // ของเลยวิ่งผ่านศูนย์คัดแยกพร้อมกันไปด้วย เกิดพร้อมกันบ่อยกว่าที่คิด)
+    const pending = new Map();
 
     for (const trackingNumber of keys) {
       const { userId, lastStatus } = subs[trackingNumber];
@@ -281,52 +280,99 @@ cron.schedule('*/3 * * * *', async () => {
       const latest = sorted[0];
       if (!latest) continue;
 
-      if (latest.status !== lastStatus) {
-        // เก็บสถานะล่าสุดเสมอ (DB write ถูก) แต่ push เฉพาะตอน "ขึ้นกลุ่มใหม่"
-        // Thai Post status เป็นเลข: 1xx ระหว่างขนส่ง (เปลี่ยนหลายรอบตามศูนย์คัดแยก),
-        // 2xx นำจ่าย, 3xx+ สำเร็จ — จัดกลุ่มตามหลักร้อยแล้ว hop ย่อยใน 1xx ยุบเหลือครั้งเดียว
-        // ลดจาก ~5-6 push/พัสดุ เหลือ 2-3 ให้อยู่ในโควต้าฟรี
-        await store.updateStatus(trackingNumber, latest.status);
+      // ตรงกับของไปรษณีย์อยู่แล้ว ไม่ต้องทำอะไรทั้งนั้น
+      if (latest.status === lastStatus) continue;
 
-        const currentTier = statusTier(latest.status);
-        const lastTier = statusTier(lastStatus);
+      // ไม่ตรง = ซิงก์หลังบ้านให้ตรงเสมอ ไม่ว่าจะแจ้งลูกค้าหรือไม่
+      // แยกขาดจากการตัดสินใจ push เพื่อให้ฐานข้อมูลสะท้อนไปรษณีย์ตลอดเวลา
+      // ไม่งั้นขั้นที่เลือกไม่แจ้งจะค้าง แล้วรอบหน้าเทียบผิดทั้งหมด
+      await store.updateStatus(trackingNumber, latest.status);
 
-        if (currentTier > lastTier) {
-          const flexMessage = buildFlexMessage(trackingNumber, result);
+      const currentTier = statusTier(latest.status);
+      const lastTier = statusTier(lastStatus);
 
-          await client.pushMessage({
-            to: userId,
-            messages: [
-              {
-                type: 'text',
-                text: await render(
-                  'parcel_update',
-                  {
-                    tracking: trackingNumber,
-                    status: latest.status_description,
-                    location: latest.location || '',
-                    time: formatDate(latest.status_date),
-                  },
-                  `🔔 อัปเดตพัสดุ ${trackingNumber}`
-                ),
-              },
-              flexMessage,
-            ],
-          });
-        }
+      // เทียบว่า "เปลี่ยนขั้น" ไม่ใช่ "ขั้นสูงขึ้น" — นำจ่ายไม่สำเร็จแล้ววนกลับ
+      // มานำจ่ายใหม่ (4 → 3) เป็นการถอยหลัง ซึ่งลูกค้าต้องรู้พอ ๆ กัน
+      // hop ย่อยในขั้นเดียวกัน (201 → 206 → 211) ยังยุบเหลือครั้งเดียวเหมือนเดิม
+      if (currentTier !== lastTier && tiers.includes(currentTier)) {
+        if (!pending.has(userId)) pending.set(userId, []);
+        pending.get(userId).push({ trackingNumber, latest, result });
+      }
 
-        // เลิกติดตามเมื่อถึงมือผู้รับจริงเท่านั้น
-        // เดิมเลิกตั้งแต่ 3xx (กำลังนำจ่าย) ลูกค้าเลยไม่เคยได้แจ้งตอนของถึงจริง
-        if (isDelivered(latest.status)) {
-          await store.unsubscribe(trackingNumber);
-          console.log(`[CRON] ${trackingNumber} delivered, unsubscribed.`);
-        }
+      // เลิกติดตามเมื่อถึงมือผู้รับจริงเท่านั้น
+      // เดิมเลิกตั้งแต่ 3xx (กำลังนำจ่าย) ลูกค้าเลยไม่เคยได้แจ้งตอนของถึงจริง
+      if (isDelivered(latest.status)) {
+        await store.unsubscribe(trackingNumber);
+        console.log(`[CRON] ${trackingNumber} delivered, unsubscribed.`);
+      }
+    }
+
+    for (const [userId, updates] of pending) {
+      try {
+        await sendParcelUpdates(userId, updates);
+      } catch (err) {
+        // คนเดียวส่งไม่ผ่านไม่ควรทำให้คนที่เหลือในรอบนี้อดไปด้วย
+        console.error(`[CRON] push ให้ ${userId} ไม่สำเร็จ:`, err.message);
       }
     }
   } catch (err) {
     console.error(`[CRON] Batch error:`, err.message);
   }
 });
+
+/**
+ * ส่งอัปเดตพัสดุของลูกค้าหนึ่งคน — หนึ่งคำขอ หนึ่งก้อน ไม่ว่าจะกี่กล่อง
+ *
+ * เดิมส่งข้อความสรุปนำหน้าการ์ดด้วย ซึ่งซ้ำกับการ์ดทุกบรรทัด
+ * (เลขพัสดุ · สถานะ · สถานที่ · เวลา มีอยู่ในการ์ดครบอยู่แล้ว)
+ * ตัดออกไม่เสียข้อมูลอะไร เพราะ altText ของการ์ดคือบรรทัดที่โผล่
+ * บนหน้าจอล็อกและในรายการแชทอยู่แล้ว — ที่ซ้ำคือส่วนที่อยู่ในห้องแชท
+ *
+ * กล่องเดียว  การ์ดเต็มพร้อมประวัติการเคลื่อนไหว
+ * หลายกล่อง  การ์ดเรียงให้ปัดดูทีละใบ
+ */
+async function sendParcelUpdates(userId, updates) {
+  const shown = updates.slice(0, CAROUSEL_MAX);
+
+  // altText = บรรทัดสรุปนอกห้องแชท ร้านแก้คำได้จากหน้าตั้งค่า
+  // ต้องบรรทัดเดียว ขึ้นบรรทัดใหม่ในนี้จะถูกยุบเป็นช่องว่างบนแบนเนอร์อยู่ดี
+  const alts = await Promise.all(
+    shown.map(({ trackingNumber, latest }) =>
+      render(
+        'parcel_update',
+        {
+          tracking: trackingNumber,
+          status: latest.status_description || latest.status,
+          location: latest.location || '',
+          time: formatDate(latest.status_date),
+        },
+        `พัสดุ ${trackingNumber}: ${latest.status_description || latest.status}`
+      )
+    )
+  );
+
+  let message;
+  if (updates.length === 1) {
+    message = buildFlexMessage(updates[0].trackingNumber, updates[0].result);
+    // buildFlexMessage ตกเป็นข้อความธรรมดาได้ถ้าสร้างการ์ดไม่ขึ้น ซึ่งไม่มี altText
+    if (message.type === 'flex') message.altText = alts[0];
+  } else {
+    message = {
+      type: 'flex',
+      // LINE ตัด altText ที่ 400 ตัวอักษร ตัดเองก่อนจะได้ไม่ขาดกลางคำ
+      altText: alts.join(' · ').slice(0, 380),
+      contents: {
+        type: 'carousel',
+        contents: shown.map(
+          ({ trackingNumber, result }) =>
+            buildParcelBubble(trackingNumber, result, true) || buildPendingBubble(trackingNumber)
+        ),
+      },
+    };
+  }
+
+  await client.pushMessage({ to: userId, messages: [message] });
+}
 
 // จัดกลุ่มสถานะพัสดุตามหลักร้อย เพื่อยุบ hop ย่อยที่ push ซ้ำ ๆ
 // null/ค่าอ่านไม่ได้ = -1 เพื่อให้สถานะจริงครั้งแรกนับเป็น "ขึ้นกลุ่มใหม่" เสมอ
