@@ -359,25 +359,25 @@ async function sendParcelUpdates(userId, updates) {
     )
   );
 
-  let message;
-  if (updates.length === 1) {
-    message = buildFlexMessage(updates[0].trackingNumber, updates[0].result);
-    // buildFlexMessage ตกเป็นข้อความธรรมดาได้ถ้าสร้างการ์ดไม่ขึ้น ซึ่งไม่มี altText
-    if (message.type === 'flex') message.altText = alts[0];
-  } else {
-    message = {
-      type: 'flex',
-      // LINE ตัด altText ที่ 400 ตัวอักษร ตัดเองก่อนจะได้ไม่ขาดกลางคำ
-      altText: alts.join(' · ').slice(0, 380),
-      contents: {
-        type: 'carousel',
-        contents: shown.map(
-          ({ trackingNumber, result }) =>
-            buildParcelBubble(trackingNumber, result, true) || buildPendingBubble(trackingNumber)
-        ),
-      },
-    };
-  }
+  // ใบย่อเสมอ ไม่ว่ากล่องเดียวหรือหลายกล่อง
+  //
+  // ใบเต็มพ่วง "ประวัติการเคลื่อนไหว" มาด้วย ซึ่งยาวขึ้นเรื่อย ๆ ตามระยะทาง
+  // พัสดุข้ามภาคจะมี 6-8 บรรทัด กินจอทั้งจอในแชทที่ร้านกับลูกค้าคุยงานกันอยู่
+  // และเป็นข้อมูลที่ลูกค้าเพิ่งเห็นไปแล้วในการ์ดใบก่อน
+  //
+  // ใบย่อตัดประวัติออก เหลือ 4 ขั้น + สถานะล่าสุด แล้วแปะปุ่ม "ดูประวัติ"
+  // ซึ่งตอบด้วย postback → reply ฟรี กดดูได้ไม่จำกัด ไม่กินโควต้า
+  const bubbles = shown.map(
+    ({ trackingNumber, result }) =>
+      buildParcelBubble(trackingNumber, result, true) || buildPendingBubble(trackingNumber)
+  );
+
+  const message = {
+    type: 'flex',
+    // LINE ตัด altText ที่ 400 ตัวอักษร ตัดเองก่อนจะได้ไม่ขาดกลางคำ
+    altText: alts.join(' · ').slice(0, 380),
+    contents: bubbles.length === 1 ? bubbles[0] : { type: 'carousel', contents: bubbles },
+  };
 
   await client.pushMessage({ to: userId, messages: [message] });
 }
