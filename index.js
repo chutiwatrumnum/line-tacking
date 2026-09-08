@@ -259,7 +259,7 @@ cron.schedule('* * * * *', async () => {
 //
 // 10 นาทีพอเหลือเฟือ = 144 คำขอ/วัน ลดลง 70% จากของเดิมด้วยซ้ำ
 // ช้าไปสิบนาทีไม่มีผลกับลูกค้า — บุรุษไปรษณีย์ใช้เวลาเป็นชั่วโมงกว่าจะถึงบ้าน
-const NOTIFY_TIERS_DEFAULT = [1, 3, 5];
+const NOTIFY_TIERS_DEFAULT = [1, 3, 4, 5];
 
 cron.schedule('*/10 * * * *', async () => {
   const subs = await store.getAll();
