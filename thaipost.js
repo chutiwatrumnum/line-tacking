@@ -52,7 +52,20 @@ async function trackParcels(barcodes) {
     }
   );
 
-  return response.data?.response?.items || {};
+  // ไปรษณีย์ตอบ HTTP 200 แม้ตอนปฏิเสธคำขอ — ต้องดูในตัว body เอง
+  // เช่น { message: "blocked, your request over quota!!", status: false }
+  //
+  // ของเดิม `?.response?.items || {}` กลืนเคสนี้เป็น "ไม่มีข้อมูล" เงียบ ๆ
+  // แล้ว cron ก็ `if (!latest) continue` ข้ามทุกใบ
+  // ผลคือบอทดูสุขภาพดีใน log ("Batch checking 20 parcel(s)") ทั้งที่ไม่ได้ทำอะไรเลย
+  // ไม่มีใครรู้จนกว่าลูกค้าจะทักมาถามว่าทำไมไม่ได้แจ้งเตือน
+  if (response.data?.status === false || !response.data?.response?.items) {
+    throw new Error(
+      `Thai Post ปฏิเสธคำขอ: ${response.data?.message || 'ไม่ทราบสาเหตุ'}`
+    );
+  }
+
+  return response.data.response.items;
 }
 
 module.exports = { trackParcel, trackParcels };
