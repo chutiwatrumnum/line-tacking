@@ -15,12 +15,16 @@ const supabase = createClient(
 
 /**
  * ดึงคิวที่ค้าง แล้วส่งทีละรายการ
- * client = LINE messaging client จาก index.js (จะได้ใช้ token ตัวเดียวกัน)
+ *
+ * client      = LINE messaging client จาก index.js (จะได้ใช้ token ตัวเดียวกัน)
+ * buildCard   = ฟังก์ชันสร้างการ์ดพัสดุจากเลขพัสดุ ส่งเข้ามาจาก index.js
+ *               (อยู่ที่นั่นเพราะต้องใช้ทั้ง thaipost กับตัวประกอบการ์ด
+ *                require ข้ามไปมาจะกลายเป็นวงกลม)
  */
-async function flushNotifications(client) {
+async function flushNotifications(client, buildCard) {
   const { data: pending, error } = await supabase
     .from('line_notifications')
-    .select('id, line_user_id, message, images')
+    .select('id, line_user_id, message, images, tracking_number')
     .eq('status', 'pending')
     .order('created_at', { ascending: true })
     .limit(20);
@@ -38,14 +42,24 @@ async function flushNotifications(client) {
       //
       // รูปต้องเป็น URL สาธารณะ LINE ไปดึงเองโดยไม่มี auth
       // previewImageUrl ใช้รูปเดียวกัน — รูปประกาศไม่ได้ใหญ่จนต้องทำ thumbnail แยก
-      const messages = [
-        { type: 'text', text: row.message },
-        ...(row.images || []).map((url) => ({
-          type: 'image',
-          originalContentUrl: url,
-          previewImageUrl: url,
-        })),
-      ].slice(0, 5);
+      // มีเลขพัสดุ = ร้านกด "ส่งซ้ำ" อยากได้การ์ดสถานะ ไม่ใช่ข้อความจัดส่งทั้งชุด
+      // ดึงสถานะสดตอนส่ง ไม่ใช่ค่าที่แช่ไว้ตอนกดปุ่ม
+      //
+      // สร้างการ์ดไม่ได้ (ไปรษณีย์ล่ม / เลขยังไม่เข้าระบบ) ก็ตกไปใช้ message
+      // ที่หน้าแอดมินใส่มาด้วย — ร้านกดปุ่มไปแล้ว ต้องมีอะไรถึงลูกค้าเสมอ
+      const card =
+        row.tracking_number && buildCard ? await buildCard(row.tracking_number) : null;
+
+      const messages = card
+        ? [card]
+        : [
+            { type: 'text', text: row.message },
+            ...(row.images || []).map((url) => ({
+              type: 'image',
+              originalContentUrl: url,
+              previewImageUrl: url,
+            })),
+          ].slice(0, 5);
 
       await client.pushMessage({ to: row.line_user_id, messages });
 

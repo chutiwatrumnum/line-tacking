@@ -238,7 +238,7 @@ cron.schedule('0 20 * * *', async () => {
 // รันทุก 1 นาที ไม่จำกัดเวลา เพราะลูกค้าเพิ่งส่งสลิปแล้วรออยู่
 cron.schedule('* * * * *', async () => {
   try {
-    await flushNotifications(client);
+    await flushNotifications(client, buildParcelCard);
   } catch (err) {
     console.error('[NOTIFY] cron error:', err.message);
   }
@@ -327,6 +327,39 @@ cron.schedule('*/3 * * * *', async () => {
     console.error(`[CRON] Batch error:`, err.message);
   }
 });
+
+/**
+ * การ์ดสถานะพัสดุใบเดียว สำหรับคิว line_notifications ที่ใส่เลขพัสดุมา
+ *
+ * ดึงสถานะสดตอนจะส่ง ไม่ใช่ตอนที่ร้านกดปุ่ม — ระหว่างนั้นของอาจขยับไปแล้ว
+ * คืน null เมื่อประกอบไม่ได้ ให้ฝั่งคิวตกไปใช้ข้อความสำรองแทน
+ */
+async function buildParcelCard(trackingNumber) {
+  try {
+    const items = await trackParcel(trackingNumber);
+    const bubble = buildParcelBubble(trackingNumber, items, true);
+    if (!bubble) return null;
+
+    const latest = [...items].reverse()[0];
+    return {
+      type: 'flex',
+      altText: await render(
+        'parcel_update',
+        {
+          tracking: trackingNumber,
+          status: latest.status_description || latest.status,
+          location: latest.location || '',
+          time: formatDate(latest.status_date),
+        },
+        `พัสดุ ${trackingNumber}: ${latest.status_description || latest.status}`
+      ),
+      contents: bubble,
+    };
+  } catch (err) {
+    console.error(`[NOTIFY] สร้างการ์ด ${trackingNumber} ไม่สำเร็จ:`, err.message);
+    return null;
+  }
+}
 
 /**
  * ส่งอัปเดตพัสดุของลูกค้าหนึ่งคน — หนึ่งคำขอ หนึ่งก้อน ไม่ว่าจะกี่กล่อง
