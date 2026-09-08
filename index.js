@@ -281,7 +281,7 @@ cron.schedule('*/10 * * * *', async () => {
     const pending = new Map();
 
     for (const trackingNumber of keys) {
-      const { userId, lastStatus } = subs[trackingNumber];
+      const { userId, lastStatus, orderId } = subs[trackingNumber];
       const result = allResults[trackingNumber] || [];
       const sorted = [...result].reverse();
       const latest = sorted[0];
@@ -317,6 +317,9 @@ cron.schedule('*/10 * * * *', async () => {
       // เลิกติดตามเมื่อถึงมือผู้รับจริงเท่านั้น
       // เดิมเลิกตั้งแต่ 3xx (กำลังนำจ่าย) ลูกค้าเลยไม่เคยได้แจ้งตอนของถึงจริง
       if (isDelivered(latest.status)) {
+        // ปิดบิลให้ด้วย ไม่ใช่แค่หยุดติดตาม — ไปรษณีย์เพิ่งยืนยันว่าถึงมือแล้ว
+        // ร้านจะได้ไม่ต้องไล่กด "ถึงแล้ว" เองทีละใบ
+        await store.markDelivered(orderId);
         await store.unsubscribe(trackingNumber);
         console.log(`[CRON] ${trackingNumber} delivered, unsubscribed.`);
       }

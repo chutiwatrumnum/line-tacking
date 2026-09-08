@@ -59,7 +59,7 @@ async function unsubscribe(trackingNumber) {
 async function getAll() {
   const { data, error } = await supabase
     .from(TABLE)
-    .select('tracking_number, line_user_id, last_status');
+    .select('tracking_number, line_user_id, last_status, order_id');
 
   if (error) throw new Error(`getAll ล้มเหลว: ${error.message}`);
 
@@ -68,6 +68,7 @@ async function getAll() {
     result[row.tracking_number] = {
       userId: row.line_user_id,
       lastStatus: row.last_status,
+      orderId: row.order_id,
     };
   }
   return result;
@@ -111,4 +112,24 @@ async function getPushTiers() {
   return tierCache;
 }
 
-module.exports = { subscribe, unsubscribe, getAll, updateStatus, getPushTiers };
+/**
+ * ปิดบิลเมื่อไปรษณีย์แจ้งนำจ่ายสำเร็จ
+ *
+ * เดิมร้านต้องไล่กด "ถึงแล้ว" เองทุกใบ ทั้งที่บอทรู้อยู่แล้วว่าถึงเมื่อไหร่
+ *
+ * เขียนเฉพาะบิลที่ยังเป็น pending/shipped — ห้ามทับบิลที่ยกเลิกไปแล้ว
+ * และทำให้เรียกซ้ำได้ด้วย เพราะรอบสองจะไม่มีแถวไหนเข้าเงื่อนไขอีก
+ */
+async function markDelivered(orderId) {
+  if (!orderId) return;
+
+  const { error } = await supabase
+    .from('orders')
+    .update({ status: 'delivered', delivered_at: new Date().toISOString() })
+    .eq('id', orderId)
+    .in('status', ['pending', 'shipped']);
+
+  if (error) console.error(`[STORE] ปิดบิล ${orderId} ไม่สำเร็จ:`, error.message);
+}
+
+module.exports = { subscribe, unsubscribe, getAll, updateStatus, getPushTiers, markDelivered };
