@@ -19,6 +19,37 @@ const client = new line.messagingApi.MessagingApiClient({
   channelAccessToken: config.channelAccessToken,
 });
 
+// โควต้าข้อความ push ของเดือนนี้เต็มแล้วหรือยัง
+//
+// แพ็กเกจฟรีได้เดือนละ 300 ข้อความ เต็มแล้ว LINE ตอบ 429 ทุก push จนรีเซ็ตต้นเดือน
+// ถามโควต้าไม่นับเป็นข้อความ แต่ไม่ต้องถามทุกครั้ง จำคำตอบไว้ 5 นาทีพอ
+// อัปเกรดแพ็กเกจเมื่อไหร่ บอทกลับมาทำงานเต็มเองภายในไม่กี่นาที ไม่ต้อง deploy
+//
+// ถามไม่สำเร็จ = ถือว่ายังไม่เต็ม ทำงานแบบเดิม
+// เดาว่าเต็มทั้งที่ไม่เต็ม คือลูกค้าไม่ได้แจ้งเตือนทั้งที่ส่งได้
+const QUOTA_CACHE_MS = 5 * 60 * 1000;
+let quotaFull = false;
+let quotaCheckedAt = 0;
+
+async function isPushQuotaFull() {
+  if (Date.now() - quotaCheckedAt < QUOTA_CACHE_MS) return quotaFull;
+
+  try {
+    const [quota, usage] = await Promise.all([
+      client.getMessageQuota(),
+      client.getMessageQuotaConsumption(),
+    ]);
+    // type 'none' = ไม่ได้ตั้งเพดานไว้ ไม่มีวันเต็ม
+    quotaFull = quota.type === 'limited' && usage.totalUsage >= quota.value;
+  } catch (err) {
+    console.error('[QUOTA] ถามโควต้า LINE ไม่สำเร็จ:', err.message);
+    quotaFull = false;
+  }
+
+  quotaCheckedAt = Date.now();
+  return quotaFull;
+}
+
 const app = express();
 
 app.post('/webhook', line.middleware(config), async (req, res) => {
@@ -238,7 +269,11 @@ cron.schedule('0 20 * * *', async () => {
 // รันทุก 1 นาที ไม่จำกัดเวลา เพราะลูกค้าเพิ่งส่งสลิปแล้วรออยู่
 cron.schedule('* * * * *', async () => {
   try {
-    await flushNotifications(client, buildParcelCard);
+    // โควต้า LINE เต็มแล้วไม่ต้องไปดึงสถานะจากไปรษณีย์มาประกอบการ์ด เพราะยังไงก็ส่งไม่ออก
+    // คืน null ให้คิวตกไปใช้ข้อความสำรอง แถวจะไปขึ้นในกล่องส่งไม่สำเร็จให้ร้านคัดลอกไปส่งเองเหมือนเดิม
+    await flushNotifications(client, async (trackingNumber) =>
+      (await isPushQuotaFull()) ? null : buildParcelCard(trackingNumber)
+    );
   } catch (err) {
     console.error('[NOTIFY] cron error:', err.message);
   }
@@ -265,9 +300,30 @@ cron.schedule('* * * * *', async () => {
 // ถ้าเหลือ token เดียวรับได้แค่ ~20 กล่อง — ส่งของล็อตใหญ่จนโควต้าเต็มบ่อย ๆ ให้ขยับเป็นทุกชั่วโมง
 // ที่เสียคือถ้านำจ่ายเสร็จภายใน 30 นาที ลูกค้าจะได้แค่ "นำจ่ายสำเร็จ"
 // ซึ่งเกิดไม่บ่อย — จากออกไปนำจ่ายถึงส่งถึงมือปกติกินเวลาหลายชั่วโมง
+//
+// โควต้าข้อความ LINE ของเดือนเต็มเมื่อไหร่ ไม่เช็คเลยทั้งรอบ
+// เช็คไปก็แจ้งใครไม่ได้ (push โดน 429 ทุกข้อความ) เสียโควต้าไปรษณีย์เปล่า ๆ
+// ช่วงนั้นลูกค้ากด "พัสดุของฉัน" เช็คเอง ซึ่งตอบกลับฟรีและดึงสถานะสดทุกครั้งอยู่แล้ว
+//
+// ที่เสียคือบิลไม่ถูกปิดอัตโนมัติ — ปิดตอนลูกค้ากดแล้วเจอว่าถึง (closeDelivered)
+// ใบที่ไม่มีใครกด ร้านกด "ถึงแล้ว" เอง หรือรอ cron กลับมา
+// cron กลับมาเช็คเองเมื่อโควต้ารีเซ็ตต้นเดือนหรืออัปเกรดแพ็กเกจ
 const NOTIFY_TIERS_DEFAULT = [1, 3, 4, 5];
 
+// สถานะที่เกิดนานกว่านี้แล้วไม่ push ซิงก์หลังบ้านอย่างเดียว
+//
+// ตอน cron กลับมาหลังหยุดไปครึ่งเดือน สถานะที่ค้างไว้จะเปลี่ยนพร้อมกันทุกใบ
+// ถ้าแจ้งหมด ลูกค้าได้ "นำจ่ายสำเร็จ" ของปลาที่รับไปเป็นอาทิตย์แล้ว
+// และโควต้าที่เพิ่งได้คืนมาหมดไปกับข่าวเก่าทั้งก้อน
+// ปกติ cron เห็นสถานะใหม่ภายในครึ่งชั่วโมง 12 ชั่วโมงจึงเผื่อไปรษณีย์ขึ้นข้อมูลช้าไว้เหลือ ๆ
+const STALE_PUSH_HOURS = 12;
+
 cron.schedule('*/30 * * * *', async () => {
+  if (await isPushQuotaFull()) {
+    console.log('[CRON] โควต้าข้อความ LINE เต็ม ไม่เช็คพัสดุรอบนี้ — รอลูกค้ากด "พัสดุของฉัน" เอง');
+    return;
+  }
+
   const subs = await store.getAll();
   const keys = Object.keys(subs);
   if (keys.length === 0) return;
@@ -278,7 +334,8 @@ cron.schedule('*/30 * * * *', async () => {
     const tiers = (await store.getPushTiers()) || NOTIFY_TIERS_DEFAULT;
 
     // 1 API call สำหรับทุกเลขพัสดุ
-    const allResults = await trackParcels(keys);
+    // ยิงทีเดียวหลายสิบเลข ให้เวลามากกว่าค่าปกติที่ตั้งไว้เผื่อตอนลูกค้ากดเช็คเอง
+    const allResults = await trackParcels(keys, { timeout: 30 * 1000 });
 
     // เก็บของลูกค้าคนเดียวกันไว้ก่อน แล้วส่งทีเดียวตอนจบ
     // LINE นับโควต้าตามจำนวนคนรับ ไม่ใช่จำนวนข้อความ — คนที่มี 3 กล่อง
@@ -315,7 +372,12 @@ cron.schedule('*/30 * * * *', async () => {
       // นอกจากนั้นเทียบว่า "เปลี่ยนขั้น" ไม่ใช่ "ขั้นสูงขึ้น" — นำจ่ายไม่สำเร็จ
       // แล้ววนกลับมานำจ่ายใหม่ (4 → 3) เป็นการถอยหลัง ซึ่งลูกค้าต้องรู้พอ ๆ กัน
       // hop ย่อยในขั้นเดียวกัน (201 → 206 → 211) ยังยุบเหลือครั้งเดียวเหมือนเดิม
-      if (firstSighting || (currentTier !== lastTier && tiers.includes(currentTier))) {
+      //
+      // และต้องเป็นสถานะที่เพิ่งเกิด (ดู STALE_PUSH_HOURS) ของเก่าซิงก์หลังบ้านอย่างเดียว
+      if (
+        (firstSighting || (currentTier !== lastTier && tiers.includes(currentTier))) &&
+        isFresh(latest.status_date)
+      ) {
         if (!pending.has(userId)) pending.set(userId, []);
         pending.get(userId).push({ trackingNumber, latest, result });
       }
@@ -325,7 +387,7 @@ cron.schedule('*/30 * * * *', async () => {
       if (isDelivered(latest.status)) {
         // ปิดบิลให้ด้วย ไม่ใช่แค่หยุดติดตาม — ไปรษณีย์เพิ่งยืนยันว่าถึงมือแล้ว
         // ร้านจะได้ไม่ต้องไล่กด "ถึงแล้ว" เองทีละใบ
-        await store.markDelivered(orderId);
+        await store.markDelivered(orderId, parseStatusDate(latest.status_date), trackingNumber);
         await store.unsubscribe(trackingNumber);
         console.log(`[CRON] ${trackingNumber} delivered, unsubscribed.`);
       }
@@ -459,12 +521,7 @@ async function replyMyParcels(event, userId) {
     .filter(([, v]) => v.userId === userId)
     .map(([num]) => num);
 
-  if (myNumbers.length === 0) {
-    return client.replyMessage({
-      replyToken: event.replyToken,
-      messages: [{ type: 'text', text: await render('list_empty', {}, '📭 ไม่มีพัสดุที่กำลังติดตามอยู่ครับ') }],
-    });
-  }
+  if (myNumbers.length === 0) return replyNothingInTransit(event, userId);
 
   let items;
   try {
@@ -480,6 +537,8 @@ async function replyMyParcels(event, userId) {
       messages: [{ type: 'text', text: lines.join('\n') }],
     });
   }
+
+  await closeDelivered(myNumbers, subs, items);
 
   // ชิ้นเดียว ส่งการ์ดเต็มพร้อมประวัติการเคลื่อนไหว
   if (myNumbers.length === 1 && (items[myNumbers[0]] || []).length > 0) {
@@ -511,6 +570,76 @@ async function replyMyParcels(event, userId) {
     footer,
   ].filter(Boolean).join('\n');
   if (note) messages.push({ type: 'text', text: note });
+
+  return client.replyMessage({ replyToken: event.replyToken, messages });
+}
+
+/**
+ * ของที่ไปรษณีย์บอกว่าถึงแล้ว ปิดบิลและเลิกติดตามตอนลูกค้ากดเลย ไม่รอ cron
+ *
+ * ช่วงโควต้า LINE เต็ม cron หยุดเช็ค การกดของลูกค้าจึงเป็นทางเดียวที่บิลจะถูกปิด
+ * ใบนี้ยังขึ้นในคำตอบรอบนี้ตามปกติ (ลูกค้าเห็นว่านำจ่ายสำเร็จ) กดครั้งหน้าจะขึ้นเป็น "กล่องล่าสุด" แทน
+ */
+async function closeDelivered(numbers, subs, items) {
+  for (const num of numbers) {
+    const latest = [...(items[num] || [])].reverse()[0];
+    if (!latest || !isDelivered(latest.status)) continue;
+
+    try {
+      await store.markDelivered(subs[num].orderId, parseStatusDate(latest.status_date), num);
+      await store.unsubscribe(num);
+      console.log(`[MY_PARCELS] ${num} delivered, unsubscribed.`);
+    } catch (err) {
+      // ปิดไม่ผ่านไม่ควรทำให้ลูกค้าไม่ได้คำตอบ — กดครั้งหน้าหรือ cron รอบถัดไปจะลองใหม่
+      console.error(`[MY_PARCELS] ปิด ${num} ไม่สำเร็จ:`, err.message);
+    }
+  }
+}
+
+/**
+ * กด "พัสดุของฉัน" แล้วไม่มีของที่กำลังเดินทาง
+ *
+ * ของที่ส่งถึงแล้วหลุดจากรายการติดตามทันที ถ้าตอบแค่ว่าไม่มีพัสดุ ลูกค้าที่ยังไม่รู้ว่าของถึง
+ * (คนที่บ้านรับแทน / ข้อความแจ้งส่งไม่ออกตอนโควต้า LINE เต็ม) จะเข้าใจว่าร้านยังไม่ส่ง
+ * เคสจริง 15 ก.ย. 69 — เมื่อวานลูกค้ายังเห็นการ์ด วันนี้กดแล้วบอทบอกว่ายังไม่มีพัสดุ
+ *
+ * มีกล่องที่ถึงภายใน LAST_DELIVERED_DAYS วัน → บอกว่ากล่องล่าสุดถึงเมื่อไหร่ พร้อมการ์ดจากไปรษณีย์
+ * (มีชื่อผู้รับ ลูกค้าจะรู้ว่าใครรับไว้) ไม่มี → ข้อความเดิม
+ */
+async function replyNothingInTransit(event, userId) {
+  const last = await store.getLastDelivered(userId, LAST_DELIVERED_DAYS);
+
+  if (!last) {
+    return client.replyMessage({
+      replyToken: event.replyToken,
+      messages: [{ type: 'text', text: await render('list_empty', {}, '📭 ไม่มีพัสดุที่กำลังติดตามอยู่ครับ') }],
+    });
+  }
+
+  const tracking = last.tracking_number.trim().toUpperCase();
+  let items = [];
+  try {
+    items = await trackParcel(tracking);
+  } catch (err) {
+    // ไปรษณีย์ล่มก็ยังตอบได้ ใช้เวลาที่บันทึกไว้ตอนปิดบิลแทน
+    console.error('[MY_PARCELS] ดึงกล่องล่าสุดไม่สำเร็จ:', err.message);
+  }
+
+  // เวลาจากไปรษณีย์ก่อน — บิลที่ปิดก่อนแก้ครั้งนี้ delivered_at คือเวลาที่บอทเห็น ไม่ใช่เวลาที่ของถึง
+  const delivered = [...items].reverse().find((item) => isDelivered(item.status));
+  const time = formatThaiTime(
+    (delivered && parseStatusDate(delivered.status_date)) || new Date(last.delivered_at)
+  );
+
+  const text = await render(
+    'list_last_delivered',
+    { tracking, time, order_number: last.order_number || '' },
+    `📭 ตอนนี้ไม่มีพัสดุที่กำลังเดินทางครับ\n\n✅ กล่องล่าสุด ${tracking}\nนำจ่ายสำเร็จเมื่อ ${time}`
+  );
+
+  // การ์ดก่อน ข้อความปิดท้าย — การ์ดเต็มมีประวัติยาว บรรทัดล่างสุดคือที่ลูกค้าเห็นก่อน
+  const messages = [{ type: 'text', text }];
+  if (items.length > 0) messages.unshift(buildFlexMessage(tracking, items));
 
   return client.replyMessage({ replyToken: event.replyToken, messages });
 }
@@ -573,6 +702,43 @@ function formatDate(dateStr) {
   return dateStr.replace(/\+07:00$/, '').trim();
 }
 
+/**
+ * เวลาของสถานะจากไปรษณีย์ รูปแบบ "14/09/2569 17:28:09+07:00" (ปี พ.ศ. เวลาไทย)
+ * อ่านไม่ออกคืน null — ผู้เรียกทุกที่ต้องมีทางไปต่อ
+ */
+function parseStatusDate(dateStr) {
+  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?/.exec(dateStr || '');
+  if (!m) return null;
+
+  const year = Number(m[3]);
+  const date = new Date(Date.UTC(
+    year > 2400 ? year - 543 : year,
+    Number(m[2]) - 1,
+    Number(m[1]),
+    Number(m[4]) - 7, // เวลาไทย → UTC
+    Number(m[5]),
+    Number(m[6] || 0)
+  ));
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+/**
+ * สถานะนี้เพิ่งเกิดพอจะแจ้งลูกค้าไหม
+ * อ่านเวลาไม่ออกถือว่าใหม่ แจ้งตามเดิม — ดีกว่าเงียบใส่ลูกค้าเพราะไปรษณีย์เปลี่ยนรูปแบบวันที่
+ */
+function isFresh(dateStr) {
+  const at = parseStatusDate(dateStr);
+  return !at || Date.now() - at.getTime() < STALE_PUSH_HOURS * 60 * 60 * 1000;
+}
+
+/** "15/09/2569 13:05 น." — เวลาไทย ปี พ.ศ. แบบที่ไปรษณีย์ใช้ ไม่พึ่ง locale ของเครื่องที่รันบอท */
+function formatThaiTime(date) {
+  const t = new Date(date.getTime() + 7 * 60 * 60 * 1000);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(t.getUTCDate())}/${pad(t.getUTCMonth() + 1)}/${t.getUTCFullYear() + 543} ` +
+    `${pad(t.getUTCHours())}:${pad(t.getUTCMinutes())} น.`;
+}
+
 // รหัสสถานะของไปรษณีย์ไทย อ้างอิงจากที่ API คืนมาจริง ไม่ใช่การเดา
 //   1xx  รับฝาก                      103 รับฝากสิ่งของ
 //   2xx  ระหว่างขนส่ง                201 ออกจากที่ทำการ · 206 ถึงที่ทำการปลายทาง · 211 เข้าศูนย์คัดแยก
@@ -586,6 +752,10 @@ const DELIVERED_CODE = 500;
 
 // LINE รับ carousel ได้สูงสุด 12 ใบ ส่งเกินนี้คือข้อความตีกลับทั้งก้อน
 const CAROUSEL_MAX = 12;
+
+// กด "พัสดุของฉัน" แล้วไม่มีของที่กำลังเดินทาง บอกกล่องล่าสุดที่ถึงภายในกี่วัน
+// นานกว่านี้ลูกค้ามักกดเพราะรอบิลใหม่ ไม่ได้ถามถึงกล่องเก่า
+const LAST_DELIVERED_DAYS = 7;
 
 /** ถึงมือผู้รับแล้วจริง ๆ — ไม่ใช่แค่ออกไปส่ง */
 function isDelivered(status) {

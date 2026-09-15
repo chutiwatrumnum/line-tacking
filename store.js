@@ -117,19 +117,64 @@ async function getPushTiers() {
  *
  * เดิมร้านต้องไล่กด "ถึงแล้ว" เองทุกใบ ทั้งที่บอทรู้อยู่แล้วว่าถึงเมื่อไหร่
  *
- * เขียนเฉพาะบิลที่ยังเป็น pending/shipped — ห้ามทับบิลที่ยกเลิกไปแล้ว
+ * เขียนเฉพาะบิลที่ยังเป็น pending/shipped หรือถึงแล้วแต่ยังไม่มีเวลา — ห้ามทับบิลที่ยกเลิกไปแล้ว
  * และทำให้เรียกซ้ำได้ด้วย เพราะรอบสองจะไม่มีแถวไหนเข้าเงื่อนไขอีก
  */
-async function markDelivered(orderId) {
-  if (!orderId) return;
+async function markDelivered(orderId, deliveredAt, trackingNumber) {
+  // เวลาที่ไปรษณีย์บันทึกว่าถึง ไม่ใช่เวลาที่บอทเห็น (ตรงกับ comment ของคอลัมน์)
+  // ตอนโควต้า LINE เต็ม บิลถูกปิดตอนลูกค้ากดเช็ค ซึ่งอาจช้ากว่าของถึงเป็นวัน
+  // ใช้เวลาที่กด ตัวเลข "ส่งกี่วันถึง" ในหน้าแอดมินจะยืดออกไปเอง
+  const values = { status: 'delivered', delivered_at: (deliveredAt || new Date()).toISOString() };
 
-  const { error } = await supabase
-    .from('orders')
-    .update({ status: 'delivered', delivered_at: new Date().toISOString() })
-    .eq('id', orderId)
-    .in('status', ['pending', 'shipped']);
+  // ปิดทั้งใบที่ถือแถวติดตาม และทุกใบที่ใช้เลขพัสดุเดียวกัน
+  //
+  // แพ็ครวมกล่องแล้ว sync_parcel_subscription ให้ใบแรกถือแถวไว้ใบเดียว ('shared')
+  // เดิมปิดแค่ใบนั้น ใบที่รวมกล่องจึงค้าง "ส่งแล้ว" ตลอดไป ทั้งที่อยู่กล่องเดียวกันและถึงพร้อมกัน
+  const targets = [];
+  if (orderId) targets.push(['id', orderId]);
+  if (trackingNumber) targets.push(['tracking_number', trackingNumber]);
 
-  if (error) console.error(`[STORE] ปิดบิล ${orderId} ไม่สำเร็จ:`, error.message);
+  for (const [column, value] of targets) {
+    const { error } = await supabase
+      .from('orders')
+      .update(values)
+      .eq(column, value)
+      // ใบที่ร้านกด "ถึงแล้ว" เองไปก่อนก็เติมเวลาให้ด้วย — สถานะถูกอยู่แล้วแต่ไม่มีเวลา
+      // ไม่เติม "พัสดุของฉัน" จะหาใบนี้ไม่เจอ แล้วกลับไปตอบลูกค้าว่ายังไม่มีพัสดุ
+      .or('status.in.(pending,shipped),and(status.eq.delivered,delivered_at.is.null)');
+
+    if (error) console.error(`[STORE] ปิดบิล (${column} = ${value}) ไม่สำเร็จ:`, error.message);
+  }
 }
 
-module.exports = { subscribe, unsubscribe, getAll, updateStatus, getPushTiers, markDelivered };
+/**
+ * บิลล่าสุดของลูกค้าคนนี้ที่ไปรษณีย์ส่งถึงภายใน days วัน — null ถ้าไม่มี
+ *
+ * ของที่ถึงแล้วถูกลบออกจาก parcel_subscriptions ไปแล้ว ต้องมาดูที่บิลแทน
+ * delivered_at บอทเป็นคนเขียน บิลที่ร้านกด "ถึงแล้ว" เองไม่มีค่านี้จึงไม่ถูกหยิบมา
+ * (ร้านกดตอนไหนก็ได้ บอกลูกค้าว่าของถึงเมื่อไหร่จากตรงนั้นไม่ได้)
+ */
+async function getLastDelivered(userId, days) {
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+  const { data, error } = await supabase
+    .from('orders')
+    .select('order_number, tracking_number, delivered_at')
+    .eq('line_user_id', userId)
+    .eq('status', 'delivered')
+    .not('tracking_number', 'is', null)
+    .neq('tracking_number', '')
+    .gte('delivered_at', since)
+    .order('delivered_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  // อ่านไม่ได้ = ตอบแบบไม่มีพัสดุตามเดิม ดีกว่าลูกค้ากดแล้วเงียบ
+  if (error) {
+    console.error('[STORE] หาบิลที่ส่งถึงล่าสุดไม่สำเร็จ:', error.message);
+    return null;
+  }
+  return data;
+}
+
+module.exports = { subscribe, unsubscribe, getAll, updateStatus, getPushTiers, markDelivered, getLastDelivered };

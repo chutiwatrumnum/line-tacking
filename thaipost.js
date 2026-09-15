@@ -19,6 +19,15 @@ const API_TOKENS = (process.env.THAIPOST_API_TOKENS || process.env.THAIPOST_API_
 // ถ้ายังหมดก็แค่โดนปฏิเสธอีกคำขอแล้วพักต่อ ดีกว่าเดาว่ารีเซ็ตเที่ยงคืนแล้วพักผิดทั้งวัน
 const QUOTA_RETRY_MS = 60 * 60 * 1000;
 
+// ไปรษณีย์ไม่ตอบภายในเวลานี้ = ถือว่าล่ม
+//
+// เดิมไม่ได้ตั้งไว้ axios จึงรอไปเรื่อย ๆ ไม่มีกำหนด และ webhook ตอบ LINE หลังได้ผลจากไปรษณีย์
+// ไปรษณีย์ค้างทีเดียว ลูกค้าที่กด "พัสดุของฉัน" ไม่ได้คำตอบอะไรเลยสักข้อความ
+// ยิ่งช่วงโควต้าข้อความ LINE เต็ม การกดเช็คเองเป็นทางเดียวที่ลูกค้าจะรู้ว่าของอยู่ไหน
+//
+// 10 วินาทีพอสำหรับการกดดูทีละไม่กี่เลข ส่วน cron ยิงทีเดียวหลายสิบเลข ส่งเวลามาเองตอนเรียก
+const REQUEST_TIMEOUT_MS = 10 * 1000;
+
 const accounts = API_TOKENS.map((apiToken, i) => ({
   label: `token ${i + 1}`, // ใช้ใน log — ห้าม log ตัว token จริง
   apiToken,
@@ -32,7 +41,7 @@ console.log(`[THAIPOST] ใช้ token ${accounts.length} ตัว`);
 
 class QuotaError extends Error {}
 
-async function getBearer(account) {
+async function getBearer(account, timeout) {
   if (account.bearer && Date.now() < account.bearerExpiry) {
     return account.bearer;
   }
@@ -44,6 +53,7 @@ async function getBearer(account) {
       headers: {
         Authorization: `Token ${account.apiToken}`,
       },
+      timeout,
     }
   );
 
@@ -53,8 +63,8 @@ async function getBearer(account) {
   return account.bearer;
 }
 
-async function requestItems(account, barcodes) {
-  const token = await getBearer(account);
+async function requestItems(account, barcodes, timeout) {
+  const token = await getBearer(account, timeout);
 
   const response = await axios.post(
     THAIPOST_TRACK_URL,
@@ -68,6 +78,7 @@ async function requestItems(account, barcodes) {
         Authorization: `Token ${token}`,
         'Content-Type': 'application/json',
       },
+      timeout,
     }
   );
 
@@ -87,36 +98,70 @@ async function requestItems(account, barcodes) {
   return response.data.response.items;
 }
 
+/** ไปรษณีย์ไม่รับ token — token ผิด/ถูกยกเลิก หรือ token ชั่วคราวที่จำไว้หมดอายุก่อนเวลาที่เดา */
+function isRejected(err) {
+  const code = err?.response?.status;
+  return code === 401 || code === 403;
+}
+
+/**
+ * ยิงด้วย token ชั่วคราวที่จำไว้ ถ้าโดนปฏิเสธก็ขอใหม่แล้วลองอีกครั้งเดียว
+ *
+ * อายุ 3.5 ชั่วโมงเป็นค่าที่เดาไว้เอง ไม่ได้อ่านจากไปรษณีย์ ถ้าของจริงสั้นกว่านั้น
+ * เดิมจะโดน 401 รัวไปจนครบเวลาที่จำไว้ ทั้งที่ขอ token ใหม่ครั้งเดียวก็จบ
+ */
+async function requestWithFreshBearer(account, barcodes, timeout) {
+  const usedCachedBearer = Boolean(account.bearer) && Date.now() < account.bearerExpiry;
+
+  try {
+    return await requestItems(account, barcodes, timeout);
+  } catch (err) {
+    if (!isRejected(err)) throw err;
+
+    account.bearer = null;
+    if (!usedCachedBearer) throw err;
+    return requestItems(account, barcodes, timeout);
+  }
+}
+
 // Track single parcel
-async function trackParcel(barcode) {
-  const result = await trackParcels([barcode]);
+async function trackParcel(barcode, options) {
+  const result = await trackParcels([barcode], options);
   return result[barcode] || [];
 }
 
 // Track multiple parcels in one API call
-async function trackParcels(barcodes) {
+async function trackParcels(barcodes, { timeout = REQUEST_TIMEOUT_MS } = {}) {
   if (accounts.length === 0) {
     throw new Error('ยังไม่ได้ตั้ง THAIPOST_API_TOKENS');
   }
 
-  let quotaError = null;
+  let skipped = null;
   for (const account of accounts) {
     if (Date.now() < account.exhaustedUntil) continue;
 
     try {
-      return await requestItems(account, barcodes);
+      return await requestWithFreshBearer(account, barcodes, timeout);
     } catch (err) {
-      // พังแบบอื่น (เน็ตหลุด / ไปรษณีย์ล่ม / token ผิด) เปลี่ยนบัญชีก็ไม่ช่วย โยนออกไปเลย
-      if (!(err instanceof QuotaError)) throw err;
+      // เน็ตหลุด / ไปรษณีย์ล่ม / เกินเวลา — บัญชีอื่นก็ยิงไปเซิร์ฟเวอร์เดียวกัน โยนออกไปเลย
+      if (!(err instanceof QuotaError) && !isRejected(err)) throw err;
 
+      // หมดโควต้า หรือ token ใช้ไม่ได้ — พักบัญชีนี้ไว้แล้วลองตัวถัดไปทันที
+      //
+      // เดิมข้ามให้เฉพาะตอนหมดโควต้า ส่วน 401 โยนออกไปทั้งก้อนตั้งแต่ตัวแรก
+      // token สำรองที่ยังดีอยู่เลยไม่เคยได้ทำงาน ใส่ token เสียไว้ตัวหน้าตัวเดียว เช็คพัสดุล่มทั้งระบบ
       account.exhaustedUntil = Date.now() + QUOTA_RETRY_MS;
-      quotaError = err;
-      console.error(`[THAIPOST] ${account.label} หมดโควต้า พักไว้ 1 ชั่วโมง`);
+      skipped = err;
+      console.error(
+        isRejected(err)
+          ? `[THAIPOST] ${account.label} ถูกปฏิเสธ (${err.response.status}) — เช็ค token ตัวนี้ใน env พักไว้ 1 ชั่วโมง`
+          : `[THAIPOST] ${account.label} หมดโควต้า พักไว้ 1 ชั่วโมง`
+      );
     }
   }
 
-  // ทุกตัวหมดหรือพักอยู่ — ฝั่งเรียกจะตอบลูกค้าว่าตอนนี้ดึงสถานะไม่ได้
-  throw quotaError || new QuotaError('Thai Post ปฏิเสธคำขอ: ทุก token หมดโควต้า รอลองใหม่');
+  // ทุกตัวหมด ถูกปฏิเสธ หรือพักอยู่ — ฝั่งเรียกจะตอบลูกค้าว่าตอนนี้ดึงสถานะไม่ได้
+  throw skipped || new QuotaError('Thai Post ปฏิเสธคำขอ: ทุก token หมดโควต้าหรือใช้ไม่ได้ รอลองใหม่');
 }
 
 module.exports = { trackParcel, trackParcels };
