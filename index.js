@@ -387,8 +387,8 @@ cron.schedule('*/30 * * * *', async () => {
       if (isDelivered(latest.status)) {
         // ปิดบิลให้ด้วย ไม่ใช่แค่หยุดติดตาม — ไปรษณีย์เพิ่งยืนยันว่าถึงมือแล้ว
         // ร้านจะได้ไม่ต้องไล่กด "ถึงแล้ว" เองทีละใบ
-        await store.markDelivered(orderId, parseStatusDate(latest.status_date), trackingNumber);
         await store.unsubscribe(trackingNumber);
+        await store.markDelivered(orderId, parseStatusDate(latest.status_date), trackingNumber);
         console.log(`[CRON] ${trackingNumber} delivered, unsubscribed.`);
       }
     }
@@ -586,8 +586,8 @@ async function closeDelivered(numbers, subs, items) {
     if (!latest || !isDelivered(latest.status)) continue;
 
     try {
-      await store.markDelivered(subs[num].orderId, parseStatusDate(latest.status_date), num);
       await store.unsubscribe(num);
+      await store.markDelivered(subs[num].orderId, parseStatusDate(latest.status_date), num);
       console.log(`[MY_PARCELS] ${num} delivered, unsubscribed.`);
     } catch (err) {
       // ปิดไม่ผ่านไม่ควรทำให้ลูกค้าไม่ได้คำตอบ — กดครั้งหน้าหรือ cron รอบถัดไปจะลองใหม่

@@ -124,26 +124,40 @@ async function markDelivered(orderId, deliveredAt, trackingNumber) {
   // เวลาที่ไปรษณีย์บันทึกว่าถึง ไม่ใช่เวลาที่บอทเห็น (ตรงกับ comment ของคอลัมน์)
   // ตอนโควต้า LINE เต็ม บิลถูกปิดตอนลูกค้ากดเช็ค ซึ่งอาจช้ากว่าของถึงเป็นวัน
   // ใช้เวลาที่กด ตัวเลข "ส่งกี่วันถึง" ในหน้าแอดมินจะยืดออกไปเอง
-  const values = { status: 'delivered', delivered_at: (deliveredAt || new Date()).toISOString() };
+  const at = (deliveredAt || new Date()).toISOString();
 
-  // ปิดทั้งใบที่ถือแถวติดตาม และทุกใบที่ใช้เลขพัสดุเดียวกัน
+  // ปิดทั้งใบที่ถือแถวติดตาม และทุกใบที่มีกล่องนี้อยู่ในรายการ
   //
   // แพ็ครวมกล่องแล้ว sync_parcel_subscription ให้ใบแรกถือแถวไว้ใบเดียว ('shared')
   // เดิมปิดแค่ใบนั้น ใบที่รวมกล่องจึงค้าง "ส่งแล้ว" ตลอดไป ทั้งที่อยู่กล่องเดียวกันและถึงพร้อมกัน
-  const targets = [];
-  if (orderId) targets.push(['id', orderId]);
-  if (trackingNumber) targets.push(['tracking_number', trackingNumber]);
+  const ids = new Set();
+  if (orderId) ids.add(orderId);
 
-  for (const [column, value] of targets) {
-    const { error } = await supabase
+  if (trackingNumber) {
+    const { data, error } = await supabase
       .from('orders')
-      .update(values)
-      .eq(column, value)
-      // ใบที่ร้านกด "ถึงแล้ว" เองไปก่อนก็เติมเวลาให้ด้วย — สถานะถูกอยู่แล้วแต่ไม่มีเวลา
-      // ไม่เติม "พัสดุของฉัน" จะหาใบนี้ไม่เจอ แล้วกลับไปตอบลูกค้าว่ายังไม่มีพัสดุ
-      .or('status.in.(pending,shipped),and(status.eq.delivered,delivered_at.is.null)');
+      .select('id')
+      .contains('tracking_numbers', [trackingNumber]);
 
-    if (error) console.error(`[STORE] ปิดบิล (${column} = ${value}) ไม่สำเร็จ:`, error.message);
+    if (error) console.error('[STORE] หาบิลที่ใช้เลขนี้ไม่สำเร็จ:', error.message);
+    else for (const row of data || []) ids.add(row.id);
+  }
+
+  // บิลเดียวแยกส่งหลายกล่อง ปิดได้ต่อเมื่อถึงครบทุกกล่อง
+  // ปิดตั้งแต่กล่องแรกถึง จะทำให้ sync_parcel_subscription เห็นว่าบิลจบแล้ว
+  // แล้วเลิกตามกล่องที่เหลือ ลูกค้าที่รอกล่องสองจะไม่มีวันรู้ว่าของถึงไหน
+  //
+  // ฝั่ง DB เป็นคนนับกล่องที่ยังเดินทางอยู่ ต้องเรียกหลัง unsubscribe ของกล่องนี้แล้วเท่านั้น
+  for (const id of ids) {
+    const { data, error } = await supabase.rpc('close_order_if_all_delivered', {
+      p_order_id: id,
+      p_delivered_at: at,
+    });
+
+    if (error) console.error(`[STORE] ปิดบิล ${id} ไม่สำเร็จ:`, error.message);
+    else if (data && data.reason === 'boxes_in_transit') {
+      console.log(`[STORE] บิล ${id} ยังเหลืออีก ${data.remaining} กล่อง ยังไม่ปิด`);
+    }
   }
 }
 
