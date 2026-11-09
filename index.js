@@ -1037,6 +1037,45 @@ function buildFlexMessage(trackingNumber, items) {
   };
 }
 
+// โควต้าข้อความที่เหลือเดือนนี้ ให้หน้าแอดมินมาถาม
+//
+// เพดานคือ 300 ข้อความ/เดือน และร้านเคยใช้หมดมาแล้วจริงในเดือนกันยายน
+// ตอนนั้นมี 14 ข้อความส่งไม่ออกโดยไม่มีอะไรเตือนล่วงหน้า ร้านรู้ตัวตอนลูกค้าทักถาม
+//
+// token ของ LINE อยู่ฝั่งนี้เท่านั้น หน้าแอดมินยิงตรงไปที่ LINE เองไม่ได้
+// cache ไว้ 5 นาที เปิดหน้าตั้งค่าบ่อย ๆ จะได้ไม่ยิง LINE ทุกครั้ง
+let quotaCache = null;
+let quotaCachedAt = 0;
+
+// หน้าแอดมินอยู่คนละโดเมน ต้องเปิด CORS ให้เฉพาะ endpoint นี้
+app.use('/quota', (req, res, next) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  next();
+});
+
+app.get('/quota', async (req, res) => {
+  if (quotaCache && Date.now() - quotaCachedAt < 5 * 60 * 1000) {
+    return res.json({ ...quotaCache, cached: true });
+  }
+
+  try {
+    const [quota, used] = await Promise.all([
+      client.getMessageQuota(),
+      client.getMessageQuotaConsumption(),
+    ]);
+
+    quotaCache = {
+      limit: quota.type === 'limited' ? quota.value : null, // null = ไม่จำกัด (แพ็กเกจเสียเงิน)
+      used: used.totalUsage,
+    };
+    quotaCachedAt = Date.now();
+    res.json(quotaCache);
+  } catch (err) {
+    console.error('[QUOTA]', err.message);
+    res.status(502).json({ error: 'ดึงโควต้าจาก LINE ไม่สำเร็จ' });
+  }
+});
+
 // Health check endpoint สำหรับ ping ตัวเอง
 // เช็กว่าโค้ดที่รันอยู่คือคอมมิตไหน — ping เฉย ๆ บอกได้แค่ว่าเซิร์ฟเวอร์ไม่ตาย
 // แต่ไม่บอกว่า deploy ใหม่ขึ้นหรือยัง ที่ผ่านมาต้องเดาเอาทุกครั้ง
