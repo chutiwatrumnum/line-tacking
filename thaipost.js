@@ -95,7 +95,26 @@ async function requestItems(account, barcodes, timeout) {
     throw new ErrorType(`Thai Post ปฏิเสธคำขอ (${account.label}): ${reason}`);
   }
 
-  return response.data.response.items;
+  const items = response.data.response.items;
+
+  // ตอบ 200 มาแล้ว แต่ในคำตอบไม่มีเลขที่ถามอยู่เลยสักเลข
+  //
+  // ไม่ใช่ "ไม่มีพัสดุ" — เคสที่เจอคือลูกค้ากดปุ่มบนการ์ดของเราเอง
+  // แล้วได้ "ไม่พบข้อมูลพัสดุหมายเลข ..." กลับไป ทั้งที่เว็บไปรษณีย์
+  // ยังมีข้อมูลเลขนั้นครบทั้ง 3 สถานะในเวลาไล่เลี่ยกัน
+  //
+  // ยังไม่รู้สาเหตุฝั่งไปรษณีย์ ที่น่าสงสัยที่สุดคือโควต้าวันละ 1,000 เลขที่เกือบเต็มทุกวัน
+  // เก็บ message กับ track_count ไว้ใน log รอบหน้าที่เกิดจะได้อ่านได้เลยว่าเพราะอะไร
+  // ไม่โยน error เพราะยังไม่รู้ว่าเลขที่ไปรษณีย์ไม่รู้จักจริง ๆ ตอบหน้าตาแบบไหน
+  if (barcodes.length > 0 && !barcodes.some((b) => b in items)) {
+    console.error(
+      `[THAIPOST] ${account.label} ตอบมาโดยไม่มีเลขที่ถามเลย (ถามไป ${barcodes.length} เลข) ` +
+        `message=${JSON.stringify(response.data?.message)} ` +
+        `track_count=${JSON.stringify(response.data?.response?.track_count)}`
+    );
+  }
+
+  return items;
 }
 
 /** ไปรษณีย์ไม่รับ token — token ผิด/ถูกยกเลิก หรือ token ชั่วคราวที่จำไว้หมดอายุก่อนเวลาที่เดา */

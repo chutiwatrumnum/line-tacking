@@ -646,15 +646,8 @@ async function replyNothingInTransit(event, userId) {
 
 /** กดดูประวัติจากการ์ดในชุด — ตอบการ์ดเต็มกลับไปใบเดียว */
 async function replyParcelDetail(event, trackingNumber) {
-  try {
-    const items = await trackParcel(trackingNumber);
-    return client.replyMessage({
-      replyToken: event.replyToken,
-      messages: [buildFlexMessage(trackingNumber, items)],
-    });
-  } catch (err) {
-    console.error('[DETAIL]', err.message);
-    return client.replyMessage({
+  const replySorry = async () =>
+    client.replyMessage({
       replyToken: event.replyToken,
       messages: [{
         type: 'text',
@@ -662,6 +655,30 @@ async function replyParcelDetail(event, trackingNumber) {
           'ตอนนี้ดึงข้อมูลจากไปรษณีย์ไม่ได้ รบกวนลองใหม่อีกครั้งครับ 🙏'),
       }],
     });
+
+  try {
+    const items = await trackParcel(trackingNumber);
+
+    // ไปรษณีย์ไม่ส่งข้อมูลเลขนี้กลับมา แต่ห้ามตอบว่า "ไม่พบข้อมูลพัสดุหมายเลข ..."
+    //
+    // เลขนี้มาจากปุ่มบนการ์ดที่เราส่งไปเอง ไม่ใช่เลขที่ลูกค้าพิมพ์มา
+    // การ์ดใบนั้นจะเกิดขึ้นได้ก็ต่อเมื่อไปรษณีย์เคยตอบข้อมูลเลขนี้มาแล้ว
+    // คำตอบว่างจึงแปลว่า "ตอนนี้ดึงไม่ได้" เท่านั้น ไม่มีทางแปลว่าพัสดุไม่มีอยู่จริง
+    //
+    // ของเดิมตกไปที่ข้อความสำรองใน buildFlexMessage ซึ่งบอกลูกค้าว่าไม่พบเลขนี้
+    // ลูกค้าที่ของกำลังเดินทางอยู่ดี ๆ จะเข้าใจว่าของหาย แล้วทักมาถามร้าน
+    if (items.length === 0) {
+      console.error(`[DETAIL] ไปรษณีย์ไม่ตอบข้อมูล ${trackingNumber} ทั้งที่เลขนี้มาจากการ์ดของเราเอง`);
+      return replySorry();
+    }
+
+    return client.replyMessage({
+      replyToken: event.replyToken,
+      messages: [buildFlexMessage(trackingNumber, items)],
+    });
+  } catch (err) {
+    console.error('[DETAIL]', err.message);
+    return replySorry();
   }
 }
 
