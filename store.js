@@ -191,4 +191,48 @@ async function getLastDelivered(userId, days) {
   return data;
 }
 
-module.exports = { subscribe, unsubscribe, getAll, updateStatus, getPushTiers, markDelivered, getLastDelivered };
+/**
+ * จำบัญชี LINE ที่ทักเข้ามา เพื่อให้หน้าร้านเลือกผูกกับบิลได้เอง
+ *
+ * บิลผูกบัญชีตอนลูกค้าเปิดลิงก์ใบสรุปในแอป LINE ซึ่งผูกผิดบัญชีได้ง่าย
+ * (ลูกค้ามีไลน์สองบัญชี เปิดลิงก์ด้วยอันหนึ่ง ทักแชทด้วยอีกอัน — เจอมาแล้วกับบิล B20261122-0624)
+ * ผูกผิดแล้วแจ้งเตือนทุกอย่างหายเงียบ เพราะ LINE ตอบว่าสำเร็จให้ push ที่ส่งหาคนที่ไม่ได้แอด OA
+ *
+ * ของเดิมแก้ได้ทางเดียวคือให้ลูกค้าเปิดลิงก์ใหม่ ซึ่งต้องไปรบกวนลูกค้าทุกครั้ง
+ * ทั้งที่ร้านกำลังเปิดแชทคนนั้นค้างอยู่แล้ว — id ของเขาผ่านมือบอทไปตอนทักมานั่นเอง แค่ไม่เคยเก็บ
+ *
+ * LINE ไม่มี API ให้ดึงรายชื่อเพื่อนย้อนหลัง (403 สำหรับบัญชีที่ไม่ได้รับรอง)
+ * เก็บตอนทักมาจึงเป็นทางเดียวที่มี
+ *
+ * ล้มเหลวไม่ต้องสนใจ นี่เป็นงานข้างเคียง ห้ามทำให้การตอบลูกค้าพัง
+ */
+async function rememberContact(trackingUserId, displayName, pictureUrl) {
+  const { error } = await supabase.from('line_contacts').upsert(
+    {
+      line_user_id: trackingUserId,
+      display_name: displayName || null,
+      picture_url: pictureUrl || null,
+      last_message_at: new Date().toISOString(),
+    },
+    { onConflict: 'line_user_id' }
+  );
+
+  if (error) console.error('[STORE] จำบัญชี LINE ไม่สำเร็จ:', error.message);
+}
+
+/**
+ * ลืมบัญชีที่บล็อกหรือลบ OA ไปแล้ว (LINE ส่ง unfollow มาตอนนั้น)
+ *
+ * รายการให้ร้านเลือกต้องมีแต่บัญชีที่ push ถึงได้จริง ไม่งั้นก็แค่ย้ายปัญหาเดิมมาไว้ในรายการ
+ * — ร้านเลือกชื่อที่คุ้น แล้วข้อความก็หายเงียบเหมือนเดิม
+ */
+async function forgetContact(trackingUserId) {
+  const { error } = await supabase
+    .from('line_contacts')
+    .delete()
+    .eq('line_user_id', trackingUserId);
+
+  if (error) console.error('[STORE] ลบบัญชี LINE ที่เลิกติดตามไม่สำเร็จ:', error.message);
+}
+
+module.exports = { subscribe, unsubscribe, getAll, updateStatus, getPushTiers, markDelivered, getLastDelivered, rememberContact, forgetContact };

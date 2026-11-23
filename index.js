@@ -63,6 +63,8 @@ app.post('/webhook', line.middleware(config), async (req, res) => {
 });
 
 async function handleEvent(event) {
+  rememberSender(event);
+
   // ปุ่ม "ดูประวัติทั้งหมด" บนการ์ดตอนมีหลายชิ้น
   // ใช้ postback ไม่ใช่ให้ปุ่มส่งเลขพัสดุเป็นข้อความ เพราะ postback ตอบด้วย reply ได้ (ฟรี)
   // ส่วนทางที่ลูกค้าพิมพ์เลขเองต้องตอบรับก่อนแล้วค่อย push ซึ่งกินโควต้า
@@ -642,6 +644,45 @@ async function replyNothingInTransit(event, userId) {
   if (items.length > 0) messages.unshift(buildFlexMessage(tracking, items));
 
   return client.replyMessage({ replyToken: event.replyToken, messages });
+}
+
+/**
+ * จำว่าใครทักมา ให้หน้าร้านมีรายชื่อให้เลือกตอนผูกบัญชี LINE เข้ากับบิล
+ *
+ * บิลผูกบัญชีตอนลูกค้าเปิดลิงก์ใบสรุปในแอป LINE ซึ่งผูกผิดบัญชีได้ง่าย
+ * ผูกผิดแล้วแจ้งเตือนหายเงียบ เพราะ LINE ตอบสำเร็จให้ push ที่ส่งหาคนที่ไม่ได้แอด OA
+ * ของเดิมแก้ได้ทางเดียวคือให้ลูกค้าเปิดลิงก์ใหม่ ทั้งที่ร้านเปิดแชทคนนั้นค้างอยู่แล้ว
+ *
+ * id ของเขาผ่านมือบอทมาตลอดทุกครั้งที่ทักเข้ามา แค่ไม่เคยเก็บไว้
+ * (LINE ไม่มี API ให้ดึงรายชื่อเพื่อนย้อนหลัง — 403 สำหรับบัญชีที่ไม่ได้รับรอง)
+ *
+ * ไม่ await ที่ฝั่งเรียก — ลูกค้าไม่ควรต้องรอให้งานข้างเคียงเสร็จก่อนได้คำตอบ
+ */
+function rememberSender(event) {
+  const userId = event.source?.userId;
+  if (!userId) return;
+
+  // บล็อกหรือลบ OA — เอาออกจากรายการทันที บัญชีนี้ push ไปก็ไม่ถึงแล้ว
+  if (event.type === 'unfollow') {
+    store.forgetContact(userId).catch((err) => console.error('[CONTACT]', err.message));
+    return;
+  }
+
+  // follow = เพิ่งแอด OA ส่วน message/postback = ทักหรือกดปุ่ม ทั้งหมดแปลว่ายังคุยกันได้
+  if (!['message', 'postback', 'follow'].includes(event.type)) return;
+
+  (async () => {
+    // ดึงชื่อสดทุกครั้ง ลูกค้าเปลี่ยนชื่อ LINE แล้วรายการต้องเปลี่ยนตาม ไม่งั้นร้านหาไม่เจอ
+    // getProfile ไม่นับโควต้าข้อความ ยิงบ่อยแค่ไหนก็ไม่เสียอะไร
+    let profile = null;
+    try {
+      profile = await client.getProfile(userId);
+    } catch (err) {
+      // ขอไม่ได้ก็ยังเก็บ id ไว้ ดีกว่าทิ้งทั้งแถวเพราะไม่มีชื่อ
+      console.error('[CONTACT] ขอโปรไฟล์ไม่สำเร็จ:', err?.status || err.message);
+    }
+    await store.rememberContact(userId, profile?.displayName, profile?.pictureUrl);
+  })().catch((err) => console.error('[CONTACT]', err.message));
 }
 
 /** กดดูประวัติจากการ์ดในชุด — ตอบการ์ดเต็มกลับไปใบเดียว */
